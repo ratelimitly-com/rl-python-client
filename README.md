@@ -1,18 +1,18 @@
-# `ratelimitly` (RateLimitly Python Client)
+# `ratelimitly` (RateLimitly Low-Level Python Client)
 
-Official Python client library for **RateLimitly** high-performance rate limiting.
+Official low-level Python client library for **RateLimitly** rate limiting.
 
-Implements the RateLimitly protocol specification, Bech32 credential parsing, binary UDP wire format, and high-availability request policies.
+1-to-1 mirror of **`rl-c-client`** specification, error codes, Bech32 credential parsing, BLAKE2s identifier derivation, and binary UDP wire protocol.
 
 ---
 
 ## Features
 
-- **Bech32 Credential Parser**: Parses `rl-aes1...` and `rl-cookie1...` API keys to derive key ID, auth mode, and secret signatures.
-- **Default Tenant SRV Auto-Construction**: Automatically resolves `_ratelimitly._udp.c-${api-key-id}.p0.ratelimitly.com` unless overridden.
-- **Simplified HA Request Policies**: Full support for `standard` (3-round), `single_round` (1-round), and `custom` schedules (`fixed`, `linear`, `exponential`).
+- **Direct Low-Level C-Client Mirror**: Returns raw status codes (`RCLIENT_OK`, `RCLIENT_ERR_TIMEOUT`, `RCLIENT_ERR_DNS`, etc.) without high-level opinionated fallbacks.
+- **Bech32 Credential Parser**: Parses `rl-aes1...` and `rl-cookie1...` API keys into key ID, auth mode, and secret bytes.
+- **Identifier Derivation**: `r_client_derive_bucket_id()` and `r_client_derive_latency_tracker_id()` matching C client BLAKE2s hashing.
+- **HA Request Policies**: Full support for `standard` (3-round), `single_round` (1-round), and `custom` schedules (`FixedSchedule`, `LinearSchedule`, `ExponentialSchedule`).
 - **Sync & Async Interfaces**: Provides both `RateLimitlyClient` and `AsyncRateLimitlyClient` (`asyncio`).
-- **BLAKE2s Identity Hashing**: Canonical 16-byte length-aware hashing matching RateLimitly identity specifications.
 
 ---
 
@@ -24,43 +24,57 @@ pip install ratelimitly
 
 ---
 
-## Quickstart Examples
+## Quickstart Example
 
 ### Synchronous Usage
 
 ```python
-from ratelimitly import RateLimitlyClient, Verdict, standard_policy
-
-# Initialize client
-client = RateLimitlyClient(
-    auth_key="rl-aes1...",
-    policy=standard_policy(unit_ms=20),
-    fail_open=True
+from ratelimitly import (
+    RateLimitlyClient,
+    ResourceRequest,
+    RCLIENT_OK,
+    r_client_derive_bucket_id,
 )
 
-# Evaluate rate limit bucket
-verdict = client.eval("bucket=v1|scope=api|ip=192.168.1.1", count=1)
+# Initialize low-level client
+client = RateLimitlyClient(auth_key="rl-aes1...")
 
-if verdict == Verdict.ALLOW:
-    print("Request allowed!")
+# Derive 16-byte bucket ID
+bucket_id = r_client_derive_bucket_id(
+    bucket_name="api_v1_checkout",
+    window_size_ms=60000,
+    rate_limit=1000
+)
+
+# Create resource request
+req = ResourceRequest(bucket_id=bucket_id, tokens_requested=1)
+
+# Check rate limit
+status, result = client.check_rate_limit([req])
+
+if status == RCLIENT_OK and result:
+    if result.success:
+        print(f"Request allowed by server {result.server_id}! Quota remaining: {result.remaining_quota}")
+    else:
+        print("Rate limit exceeded (429)")
 else:
-    print("Rate limit exceeded!")
+    # Handle low-level error (RCLIENT_ERR_TIMEOUT, RCLIENT_ERR_DNS, RCLIENT_ERR_IO)
+    print(f"RateLimitly server check failed with status: {status}")
 ```
 
 ### Asynchronous Usage (`asyncio`)
 
 ```python
 import asyncio
-from ratelimitly import AsyncRateLimitlyClient, Verdict
+from ratelimitly import AsyncRateLimitlyClient, ResourceRequest, RCLIENT_OK, r_client_derive_bucket_id
 
 async def main():
-    client = AsyncRateLimitlyClient(
-        auth_key="rl-aes1...",
-        fail_open=True
-    )
-    
-    verdict = await client.eval("bucket=v1|scope=api|user=42")
-    if verdict == Verdict.ALLOW:
+    client = AsyncRateLimitlyClient(auth_key="rl-aes1...")
+    bucket_id = r_client_derive_bucket_id("api_user_scope", 60000, 100)
+    req = ResourceRequest(bucket_id=bucket_id)
+
+    status, result = await client.check_rate_limit([req])
+    if status == RCLIENT_OK and result and result.success:
         print("Allowed!")
 
 asyncio.run(main())
@@ -70,9 +84,8 @@ asyncio.run(main())
 
 ## Documentation
 
-- [Configuration Guide](docs/configuration.md): Options, client setup, and HA request policies.
-- [API Reference](docs/api.md): Complete module, class, and method reference.
-- [Architecture & Wire Protocol](docs/architecture.md): Bech32 credential structure, UDP binary wire format, and discovery.
+- [API Reference](docs/api.md): Complete module, class, and low-level method reference.
+- [Architecture & Wire Protocol](docs/architecture.md): Bech32 credential structure, error codes, and binary wire format.
 
 For web documentation and support, visit [ratelimitly.com](https://ratelimitly.com).
 

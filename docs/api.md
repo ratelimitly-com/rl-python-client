@@ -1,38 +1,27 @@
-# RateLimitly Python API Reference
+# RateLimitly Low-Level Python API Reference
 
-Complete Python API reference for the `ratelimitly` package.
-
----
-
-## Top-Level Module Export (`ratelimitly`)
-
-```python
-from ratelimitly import (
-    RateLimitlyClient,
-    AsyncRateLimitlyClient,
-    Verdict,
-    EvaluationResult,
-    RequestPolicy,
-    Schedule,
-    FixedSchedule,
-    LinearSchedule,
-    ExponentialSchedule,
-    standard_policy,
-    single_round_policy,
-    custom_policy,
-    parse_auth_key,
-    AuthKeyInfo,
-    compute_identity_hash
-)
-```
+Low-level Python API reference matching `rl-c-client` concepts and data structures.
 
 ---
 
-## Classes
+## Error Codes (`r_client_error_t`)
+
+| Error Code Constant | Integer Value | Description |
+|---|---|---|
+| `RCLIENT_OK` | `0` | Success. |
+| `RCLIENT_ERR_IO` | `-1` | Socket / Network I/O failure. |
+| `RCLIENT_ERR_TIMEOUT` | `-2` | Timeout waiting for server response. |
+| `RCLIENT_ERR_PROTOCOL` | `-3` | Malformed packet or protocol violation. |
+| `RCLIENT_ERR_AUTH` | `-4` | Authentication / Bech32 parsing error. |
+| `RCLIENT_ERR_DNS` | `-5` | DNS SRV resolution failure. |
+| `RCLIENT_ERR_CONFIG` | `-6` | Invalid configuration parameters. |
+| `RCLIENT_ERR_NOMEM` | `-7` | Memory allocation failure. |
+
+---
+
+## Classes & Data Structures
 
 ### `RateLimitlyClient`
-
-Synchronous rate limiting client using socket UDP transport.
 
 ```python
 class RateLimitlyClient:
@@ -40,60 +29,62 @@ class RateLimitlyClient:
         self,
         auth_key: str,
         dns_srv: Optional[str] = None,
-        policy: Optional[RequestPolicy] = None,
-        fail_open: bool = True
+        policy: Optional[RequestPolicy] = None
     ) -> None: ...
 
-    def eval(self, bucket_identity: str, count: int = 1) -> Verdict: ...
+    def check_rate_limit(
+        self,
+        resources: List[ResourceRequest],
+        guards: Optional[List[LatencyGuard]] = None,
+        metrics_label: Optional[str] = None
+    ) -> Tuple[int, Optional[RateLimitResult]]: ...
+
+    def report_latency(self, reports: List[ServiceLatencyReport]) -> int: ...
     def close(self) -> None: ...
 ```
 
-#### `eval(bucket_identity: str, count: int = 1) -> Verdict`
-Evaluates a rate limit bucket identity template. Returns `Verdict.ALLOW` or `Verdict.DENY`.
-
 ---
 
-### `AsyncRateLimitlyClient`
-
-Asynchronous rate limiting client using `asyncio` UDP transport.
+### `ResourceRequest`
 
 ```python
-class AsyncRateLimitlyClient:
-    def __init__(
-        self,
-        auth_key: str,
-        dns_srv: Optional[str] = None,
-        policy: Optional[RequestPolicy] = None,
-        fail_open: bool = True
-    ) -> None: ...
-
-    async def eval(self, bucket_identity: str, count: int = 1) -> Verdict: ...
+@dataclass(frozen=True)
+class ResourceRequest:
+    bucket_id: bytes  # 16-byte BLAKE2s bucket digest
+    window_size_ms: int = 60000
+    rate_limit: int = 1000
+    tokens_requested: int = 1
 ```
 
 ---
 
-## Enums & Data Structures
+### `RateLimitResult`
 
-### `Verdict`
-- `Verdict.ALLOW = 0`: Request is permitted under the rate limit quota.
-- `Verdict.DENY = 1`: Quota exceeded; request must be rejected (429 Too Many Requests).
-- `Verdict.FAIL = 2`: Failure encountered (only returned when `fail_open=False`).
-
----
-
-### `AuthKeyInfo`
-Parsed credential details extracted from Bech32 auth keys:
-- `auth_type`: `"aes"` or `"cookie"`
-- `key_id`: `int` (uint64 tenant key identifier)
-- `secret`: `bytes` (32-byte secret key payload)
-- `default_dns_srv`: `str` (`"c-${key_id}.p0.ratelimitly.com"`)
+```python
+@dataclass(frozen=True)
+class RateLimitResult:
+    success: bool            # True if granted, False if rate limited
+    server_id: int          # 64-bit ID of responding server
+    remaining_quota: int     # Remaining quota tokens
+    reset_ttl_ms: int        # Milliseconds until quota resets
+```
 
 ---
 
-## Helper Functions
+## Identifier Derivation Helpers
 
-### `parse_auth_key(key_str: str) -> AuthKeyInfo`
-Parses Bech32 string (`rl-aes1...` or `rl-cookie1...`). Raises `ValueError` for invalid signatures or lengths.
+```python
+def r_client_derive_bucket_id(
+    bucket_name: str,
+    window_size_ms: int,
+    rate_limit: int
+) -> bytes: ...
 
-### `compute_identity_hash(identity_str: str) -> bytes`
-Computes canonical 16-byte BLAKE2s digest for bucket templates.
+def r_client_derive_latency_tracker_id(
+    service_name: str,
+    ttl_ms: int = 300000,
+    max_samples: int = 64,
+    buffer_size: int = 8,
+    min_sample_threshold: int = 1
+) -> bytes: ...
+```
