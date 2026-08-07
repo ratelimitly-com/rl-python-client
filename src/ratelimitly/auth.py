@@ -1,4 +1,4 @@
-"""Bech32 authentication key parser matching rl-c-client v0.5.1 specifications."""
+"""Bech32 authentication key parser for RateLimitly credentials."""
 
 from dataclasses import dataclass
 from typing import Literal, Tuple

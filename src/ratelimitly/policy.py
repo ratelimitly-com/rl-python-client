@@ -1,4 +1,4 @@
-"""HA Request Policy definitions matching rl-c-client v0.5.1."""
+"""HA Request Policy definitions for RateLimitly clients."""
 
 import math
 from dataclasses import dataclass

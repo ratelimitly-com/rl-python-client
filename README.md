@@ -1,8 +1,8 @@
-# `rl-python-client` (`ratelimitly`)
+# `ratelimitly` (RateLimitly Python Client)
 
 Official Python client library for **RateLimitly** high-performance rate limiting.
 
-Matches **`rl-c-client` v0.5.1** specification, binary wire protocol, Bech32 key parsing, and HA request policies.
+Implements the RateLimitly protocol specification, Bech32 credential parsing, binary UDP wire format, and high-availability request policies.
 
 ---
 
@@ -12,7 +12,7 @@ Matches **`rl-c-client` v0.5.1** specification, binary wire protocol, Bech32 key
 - **Default Tenant SRV Auto-Construction**: Automatically resolves `_ratelimitly._udp.c-${api-key-id}.p0.ratelimitly.com` unless overridden.
 - **Simplified HA Request Policies**: Full support for `standard` (3-round), `single_round` (1-round), and `custom` schedules (`fixed`, `linear`, `exponential`).
 - **Sync & Async Interfaces**: Provides both `RateLimitlyClient` and `AsyncRateLimitlyClient` (`asyncio`).
-- **BLAKE2s Identity Hashing**: Canonical 16-byte length-aware hashing matching `rl-c-client` v0.5.1.
+- **BLAKE2s Identity Hashing**: Canonical 16-byte length-aware hashing matching RateLimitly identity specifications.
 
 ---
 
@@ -65,6 +65,12 @@ async def main():
 
 asyncio.run(main())
 ```
+
+---
+
+## Documentation & Support
+
+For full documentation and API reference, visit [ratelimitly.com](https://ratelimitly.com).
 
 ---
 

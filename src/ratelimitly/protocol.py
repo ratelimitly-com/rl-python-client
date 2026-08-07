@@ -22,7 +22,7 @@ class EvaluationResult:
 def compute_identity_hash(identity_str: str) -> bytes:
     """
     Computes a 16-byte BLAKE2s digest for bucket identities and latency guard services.
-    Matches rl-c-client canonical length-aware identifier hashing.
+    Matches RateLimitly canonical length-aware identifier hashing.
     """
     return hashlib.blake2s(identity_str.encode("utf-8"), digest_size=16).digest()
 
