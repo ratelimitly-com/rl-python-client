@@ -24,7 +24,7 @@ pip install ratelimitly
 
 ---
 
-## Quickstart Example
+## Quickstart Examples
 
 ### Synchronous Usage
 
@@ -68,9 +68,13 @@ asyncio.run(main())
 
 ---
 
-## Documentation & Support
+## Documentation
 
-For full documentation and API reference, visit [ratelimitly.com](https://ratelimitly.com).
+- [Configuration Guide](docs/configuration.md): Options, client setup, and HA request policies.
+- [API Reference](docs/api.md): Complete module, class, and method reference.
+- [Architecture & Wire Protocol](docs/architecture.md): Bech32 credential structure, UDP binary wire format, and discovery.
+
+For web documentation and support, visit [ratelimitly.com](https://ratelimitly.com).
 
 ---
 
