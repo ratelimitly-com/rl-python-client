@@ -1,6 +1,6 @@
 # RateLimitly Architecture & Wire Protocol
 
-This document describes the binary wire protocol, Bech32 credential layout, and low-level error model matching `rl-c-client`.
+This document describes the binary wire protocol, Bech32 credential layout, and low-level error model.
 
 ---
 

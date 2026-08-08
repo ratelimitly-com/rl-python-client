@@ -1,6 +1,6 @@
 # RateLimitly Low-Level Python API Reference
 
-Low-level Python API reference matching `rl-c-client` concepts and data structures.
+Low-level Python API reference for RateLimitly concepts and data structures.
 
 ---
 

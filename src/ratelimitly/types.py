@@ -1,9 +1,9 @@
-"""Low-level data structures and error codes matching rl-c-client."""
+"""Low-level data structures and error codes."""
 
 from dataclasses import dataclass
 from typing import Optional, List
 
-# Low-level r_client_error_t error codes (matching C-client r_client.h)
+# Low-level error codes
 RCLIENT_OK = 0
 RCLIENT_ERR_IO = -1
 RCLIENT_ERR_TIMEOUT = -2

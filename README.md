@@ -1,19 +1,53 @@
-# `ratelimitly` (RateLimitly Low-Level Python Client)
+# RateLimitly Python Client (`ratelimitly`)
 
-Official low-level Python client library for **RateLimitly** rate limiting, latency tracking, and adaptive load shedding.
+Official Python client library for **[RateLimitly](https://ratelimitly.com/)** distributed rate limiting, latency tracking, and adaptive load shedding.
 
-1-to-1 mirror of **`rl-c-client`** specification, error codes, Bech32 credential parsing, BLAKE2s identifier derivation, and binary UDP wire protocol.
+---
+
+## What RateLimitly does
+
+[RateLimitly](https://ratelimitly.com/), a distributed admission-control service, decides whether an application may begin work that consumes configured resources. The decision may also depend on whether recently observed service latencies remain below application-defined thresholds.
+
+`ratelimitly` is the official Python library through which an application requests those decisions and, independently, contributes latency measurements used by future decisions.
+
+---
+
+## Core operations
+
+The library exposes two independent operations:
+
+- A **resource request** describes work the application wants to perform as one or more resource consumptions and zero or more latency guards. RateLimitly evaluates the request as one atomic decision. A grant consumes every requested quantity and authorizes the application to proceed; a rejection consumes none.
+- A **latency report** contributes one or more measured service latencies to the trackers used by latency guards in later resource requests. It neither requests nor consumes resources and does not itself make an admission decision.
+
+An application may use either operation without the other. A common workflow is to request permission for some work, perform it only after a grant, and then optionally report measured latencies for services used by that work.
+
+```mermaid
+flowchart LR
+    Consumer["Resource-consuming application"]:::neutral --> Request["Resource request<br/>intended consumptions + optional guards"]:::neutral
+    Request --> Evaluate["RateLimitly<br/>atomic admission decision"]:::neutral
+    Evaluate --> Decision{"Granted?"}:::neutral
+    Decision -->|No| Rejected["No resources consumed"]:::danger
+    Decision -->|Yes| Granted["Resources consumed<br/>application may perform work"]:::success
+
+    Reporter["Same or another application"]:::neutral --> Report["Optional latency report<br/>measured service latencies"]:::neutral
+    Report --> Trackers["Latency trackers"]:::neutral
+    Trackers -. "input to latency guards" .-> Evaluate
+
+    classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
+    classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
+    classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
+```
 
 ---
 
 ## Features
 
-- **Direct Low-Level C-Client Mirror**: Returns raw status codes (`RCLIENT_OK`, `RCLIENT_ERR_TIMEOUT`, `RCLIENT_ERR_DNS`, etc.) without high-level opinionated fallbacks.
+- **Status Code Errors**: Returns raw status codes (`RCLIENT_OK`, `RCLIENT_ERR_TIMEOUT`, `RCLIENT_ERR_DNS`, etc.) for fine-grained application control.
 - **Latency Guards & Load Shedding**: Evaluates latency guards (`LatencyGuard`) alongside resource requests to automatically shed traffic during downstream service degradation.
 - **Background Latency Reporting**: Reports service response times (`ServiceLatencyReport` via `report_latency()`) to feed RateLimitly's server-side latency trackers.
 - **Bech32 Credential Parser**: Parses `rl-aes1...` and `rl-cookie1...` API keys into key ID, auth mode, and secret bytes.
-- **Identifier Derivation**: `r_client_derive_bucket_id()` and `r_client_derive_latency_tracker_id()` matching C client BLAKE2s hashing.
-- **HA Request Policies**: Full support for `standard` (3-round), `single_round` (1-round), and `custom` schedules (`FixedSchedule`, `LinearSchedule`, `ExponentialSchedule`).
+- **Identifier Derivation**: `r_client_derive_bucket_id()` and `r_client_derive_latency_tracker_id()` for canonical 16-byte BLAKE2s hashing.
+- **HA Request Policies**: Support for `standard` (3-round), `single_round` (1-round), and `custom` schedules (`FixedSchedule`, `LinearSchedule`, `ExponentialSchedule`).
 - **Sync & Async Interfaces**: Provides both `RateLimitlyClient` and `AsyncRateLimitlyClient` (`asyncio`).
 
 ---
@@ -26,9 +60,9 @@ pip install ratelimitly
 
 ---
 
-## Quickstart Examples
+## Code Examples
 
-### 1. Basic Rate Limit Check (Synchronous)
+### 1. Basic Resource Request (Synchronous)
 
 ```python
 from ratelimitly import (
@@ -38,7 +72,7 @@ from ratelimitly import (
     r_client_derive_bucket_id,
 )
 
-# Initialize low-level client
+# Initialize client
 client = RateLimitlyClient(auth_key="rl-aes1...")
 
 # Derive 16-byte bucket ID
@@ -60,13 +94,11 @@ if status == RCLIENT_OK and result:
     else:
         print("Rate limit exceeded (429)")
 else:
-    # Handle low-level error (RCLIENT_ERR_TIMEOUT, RCLIENT_ERR_DNS, RCLIENT_ERR_IO)
-    print(f"RateLimitly server check failed with status: {status}")
+    # Handle error (RCLIENT_ERR_TIMEOUT, RCLIENT_ERR_DNS, RCLIENT_ERR_IO)
+    print(f"RateLimitly check failed with status: {status}")
 ```
 
 ### 2. Latency Guards (Adaptive Load Shedding)
-
-RateLimitly allows checking latency guards alongside rate limits. If a downstream service's latency exceeds the guard threshold, RateLimitly automatically sheds load:
 
 ```python
 from ratelimitly import (
@@ -95,7 +127,7 @@ guard = LatencyGuard(
     min_sample_threshold=1
 )
 
-# Check both rate limits and latency guards in a single datagram
+# Check both rate limits and latency guards in a single check
 status, result = client.check_rate_limit([resource_req], guards=[guard])
 
 if status == RCLIENT_OK and result and result.success:
@@ -103,8 +135,6 @@ if status == RCLIENT_OK and result and result.success:
 ```
 
 ### 3. Reporting Latency Metrics
-
-To keep RateLimitly's server-side latency trackers updated with real downstream performance:
 
 ```python
 from ratelimitly import (
@@ -133,7 +163,6 @@ if status == RCLIENT_OK:
 
 ## Documentation
 
-- [Configuration Guide](docs/configuration.md): Options, client setup, and HA request policies.
 - [API Reference](docs/api.md): Complete module, class, latency tracking, and method reference.
 - [Architecture & Wire Protocol](docs/architecture.md): Bech32 credential structure, error codes, and binary wire format.
 

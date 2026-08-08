@@ -24,7 +24,7 @@ def r_client_derive_bucket_id(
     rate_limit: int
 ) -> bytes:
     """
-    Derives a canonical 16-byte bucket ID matching rl-c-client r_client_derive_bucket_id.
+    Derives a canonical 16-byte bucket ID.
     """
     payload = f"{bucket_name}:{window_size_ms}:{rate_limit}".encode("utf-8")
     return hashlib.blake2s(payload, digest_size=16).digest()
@@ -38,7 +38,7 @@ def r_client_derive_latency_tracker_id(
     min_sample_threshold: int = 1
 ) -> bytes:
     """
-    Derives a canonical 16-byte latency tracker ID matching rl-c-client r_client_derive_latency_tracker_id.
+    Derives a canonical 16-byte latency tracker ID.
     """
     payload = f"{service_name}:{ttl_ms}:{max_samples}:{buffer_size}:{min_sample_threshold}".encode("utf-8")
     return hashlib.blake2s(payload, digest_size=16).digest()
