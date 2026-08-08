@@ -21,7 +21,7 @@ Low-level Python API reference matching `rl-c-client` concepts and data structur
 
 ## Classes & Data Structures
 
-### `RateLimitlyClient`
+### `RateLimitlyClient` / `AsyncRateLimitlyClient`
 
 ```python
 class RateLimitlyClient:
@@ -50,10 +50,40 @@ class RateLimitlyClient:
 ```python
 @dataclass(frozen=True)
 class ResourceRequest:
-    bucket_id: bytes  # 16-byte BLAKE2s bucket digest
+    bucket_id: bytes          # 16-byte BLAKE2s bucket digest
     window_size_ms: int = 60000
     rate_limit: int = 1000
     tokens_requested: int = 1
+```
+
+---
+
+### `LatencyGuard`
+
+```python
+@dataclass(frozen=True)
+class LatencyGuard:
+    latency_tracker_id: bytes  # 16-byte BLAKE2s tracker digest
+    threshold_ms: int          # Max latency threshold (ms) before load shedding
+    ttl_ms: int = 300000       # Time-to-live for latency tracker (ms)
+    max_samples: int = 64
+    buffer_size: int = 8
+    min_sample_threshold: int = 1
+```
+
+---
+
+### `ServiceLatencyReport`
+
+```python
+@dataclass(frozen=True)
+class ServiceLatencyReport:
+    latency_tracker_id: bytes  # 16-byte BLAKE2s tracker digest
+    observed_latency_ms: int   # Downstream service latency sample in milliseconds
+    ttl_ms: int = 300000
+    max_samples: int = 64
+    buffer_size: int = 8
+    min_sample_threshold: int = 1
 ```
 
 ---
@@ -63,7 +93,7 @@ class ResourceRequest:
 ```python
 @dataclass(frozen=True)
 class RateLimitResult:
-    success: bool            # True if granted, False if rate limited
+    success: bool            # True if granted (all deficits 0 & latency guards passed)
     server_id: int          # 64-bit ID of responding server
     remaining_quota: int     # Remaining quota tokens
     reset_ttl_ms: int        # Milliseconds until quota resets
