@@ -54,8 +54,16 @@ flowchart LR
 
 ## Installation
 
+### From PyPI
+
 ```bash
 pip install ratelimitly
+```
+
+### Directly from GitHub
+
+```bash
+pip install git+https://github.com/ratelimitly-com/rl-python-client.git
 ```
 
 ---
