@@ -1,9 +1,9 @@
-"""Low-level data structures and error codes."""
+"""Public request, response, and status types aligned with rl-c-client."""
 
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Tuple
 
-# Low-level error codes
+
 RCLIENT_OK = 0
 RCLIENT_ERR_IO = -1
 RCLIENT_ERR_TIMEOUT = -2
@@ -16,39 +16,59 @@ RCLIENT_ERR_NOMEM = -7
 
 @dataclass(frozen=True)
 class ResourceRequest:
-    """Represents a rate limit bucket request."""
-    bucket_id: bytes  # 16-byte BLAKE2s bucket digest
-    window_size_ms: int = 60000
-    rate_limit: int = 1000
-    tokens_requested: int = 1
+    """One requested consumption from a content-defined rate bucket."""
+
+    bucket_id: bytes
+    window_size_ms: int
+    rate_limit: int
+    tokens_requested: int
 
 
 @dataclass(frozen=True)
 class LatencyGuard:
-    """Represents a latency guard threshold check."""
-    latency_tracker_id: bytes  # 16-byte BLAKE2s tracker digest
+    """One admission condition evaluated against a latency tracker."""
+
+    latency_tracker_id: bytes
     threshold_ms: int
-    ttl_ms: int = 300000
-    max_samples: int = 64
-    buffer_size: int = 8
-    min_sample_threshold: int = 1
+    ttl_ms: int
+    max_samples: int
+    buffer_size: int
+    min_sample_threshold: int
 
 
 @dataclass(frozen=True)
 class ServiceLatencyReport:
-    """Represents a latency sample report for a service."""
-    latency_tracker_id: bytes  # 16-byte BLAKE2s tracker digest
+    """One observed latency contributed to a latency tracker."""
+
+    latency_tracker_id: bytes
     observed_latency_ms: int
-    ttl_ms: int = 300000
-    max_samples: int = 64
-    buffer_size: int = 8
-    min_sample_threshold: int = 1
+    ttl_ms: int
+    max_samples: int
+    buffer_size: int
+    min_sample_threshold: int
+
+
+@dataclass(frozen=True)
+class GuardResult:
+    latency_tracker_id: bytes
+    threshold_ms: int
+    current_latency_ms: int
+    passed: bool
+
+
+@dataclass(frozen=True)
+class ResourceResult:
+    bucket_id: bytes
+    tokens_deficit: int
+    actual_rate: int
 
 
 @dataclass(frozen=True)
 class RateLimitResult:
-    """Evaluation result returned when status == RCLIENT_OK."""
-    success: bool  # True if all resource deficits are 0 and all latency guards passed
-    server_id: int  # 64-bit ID of responding server
-    remaining_quota: int
-    reset_ttl_ms: int
+    """A parsed server response; success combines every returned entry."""
+
+    success: bool
+    server_id: int
+    steering_feedback: bool
+    guards: Tuple[GuardResult, ...]
+    resources: Tuple[ResourceResult, ...]

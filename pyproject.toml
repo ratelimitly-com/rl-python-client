@@ -13,6 +13,7 @@ authors = [
 license = { text = "MIT" }
 requires-python = ">=3.8"
 dependencies = [
+    "cryptography>=3.4",
     "dnspython>=2.0.0",
 ]
 classifiers = [

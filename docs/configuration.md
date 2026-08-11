@@ -1,92 +1,129 @@
-# RateLimitly Python Client Configuration Guide
+# Configuration and request policy
 
-This guide details configuration options, client initialization parameters, and high-availability (HA) request scheduling policies in the `ratelimitly` Python library.
-
----
-
-## Client Options
-
-Both `RateLimitlyClient` (synchronous) and `AsyncRateLimitlyClient` (asynchronous) accept the following parameters:
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `auth_key` | `str` | *Required* | Bech32 authentication key string (`rl-aes1...` or `rl-cookie1...`). |
-| `dns_srv` | `Optional[str]` | `None` | DNS SRV domain name used for server discovery. If omitted, defaults to `c-${key_id}.p0.ratelimitly.com`. |
-| `policy` | `Optional[RequestPolicy]` | `standard_policy()` | High-availability request scheduling policy. |
-| `fail_open` | `bool` | `True` | Failure handling strategy. If `True`, evaluates to `Verdict.ALLOW` during outages. |
-
----
-
-## High-Availability (HA) Request Policies
-
-RateLimitly uses UDP datagram scheduling to provide low-latency rate limit decisions. Policies control transmission rounds, timeout bounds, and retry schedules.
-
-### 1. `standard_policy(unit_ms=20)`
-
-- **Description**: Default 3-round transmission policy balancing fast local response with multi-server consensus.
-- **Unit Duration**: `20ms` (default)
-- **Decision Horizon**: `60ms` total (3 × `unit_ms`)
+## Client configuration
 
 ```python
-from ratelimitly import RateLimitlyClient, standard_policy
-
 client = RateLimitlyClient(
-    auth_key="rl-aes1...",
-    policy=standard_policy(unit_ms=20)
+    auth_key="rl-aes1...",  # Required Bech32 credential.
+    dns_srv=None,           # Derive the tenant domain from the credential.
+    policy=None,            # Use the C-compatible default policy.
 )
 ```
 
-### 2. `single_round_policy(unit_ms=20)`
+The credential contains the tenant key ID, a 32-byte cookie or AES-256-GCM key, and quota limits. The client verifies the Bech32 checksum and exact 60-byte payload before accepting it.
 
-- **Description**: Single-transmission policy optimized for minimal network overhead and strict low latency.
-- **Decision Horizon**: `unit_ms` (20ms default)
+When `dns_srv` is omitted, discovery queries:
+
+```text
+_ratelimitly._udp.c-<key-id>.p0.ratelimitly.com
+```
+
+Only SRV targets of the form `s-<server-id>...` become r-server endpoints. A failed refresh does not invent a default port or server; cached endpoints remain usable, otherwise the operation returns `RCLIENT_ERR_DNS`.
+
+## One parametrized HA policy
+
+Python uses the same single policy model as `rl-c-client`:
 
 ```python
-from ratelimitly import single_round_policy
-
-client = RateLimitlyClient(
-    auth_key="rl-aes1...",
-    policy=single_round_policy(unit_ms=10)
+RequestPolicy(
+    unit_ms: int,
+    replay_count: int,
+    replay_gap: Schedule,
+    final_receive_units: int = 1,
+    completion_delivery: bool = True,
 )
 ```
 
-### 3. `custom_policy(...)`
+There are no separate “standard,” “single round,” or compatibility policy modes. Those behaviors are parameter choices.
 
-For advanced workloads requiring custom backoffs or multi-replay schedules:
+For round `k`, `replay_gap.get_gap(k)` gives the round duration `B(k)` in units. The initial transmission is round zero and each replay adds one round. The final interval is receive-only.
+
+```text
+dedup_ttl_ms = unit_ms × (
+    B(0) + B(1) + ... + B(replay_count) + final_receive_units
+)
+```
+
+The computed value is both the request’s deduplication TTL and its maximum decision horizon. It must fit `uint32` and must not exceed the credential’s `dedup_ttl_ms_max`.
+
+## Default
 
 ```python
-from ratelimitly import custom_policy, LinearSchedule, ExponentialSchedule
+from ratelimitly import default_request_policy
 
-# Linear backoff schedule
-linear_pol = custom_policy(
-    unit_ms=15,
-    replays=3,
-    replay_gap=LinearSchedule(initial_units=1, step_units=1, maximum_units=4),
-    final_wait_units=2
+policy = default_request_policy()
+```
+
+This produces:
+
+| Parameter | Value |
+| --- | ---: |
+| `unit_ms` | 20 |
+| `replay_count` | 1 |
+| schedule | fixed, one unit |
+| `final_receive_units` | 1 |
+| `completion_delivery` | true |
+| deduplication TTL / horizon | 60 ms |
+
+The default sequence is:
+
+1. Send the logical request to every discovered r-server.
+2. During the first 20 ms, return immediately if the oldest known r-server responds. Otherwise retain the oldest response received and return it at the round deadline.
+3. If no response arrived, resend to servers that have not responded. During this replay round, the first valid response completes the request.
+4. If the replay round is also silent, receive without sending for one final 20 ms; the first valid response completes the request.
+5. If still silent, return `RCLIENT_ERR_TIMEOUT`.
+
+When a result is selected before the deduplication deadline and `completion_delivery` is enabled, the client best-effort resends the same logical request to missing servers. This helps replicas converge for grants and denials; deduplication prevents a server that already handled the request from consuming it twice.
+
+## Custom fixed, linear, and exponential schedules
+
+```python
+from ratelimitly import (
+    ExponentialSchedule,
+    FixedSchedule,
+    LinearSchedule,
+    RequestPolicy,
 )
 
-# Exponential backoff schedule
-exp_pol = custom_policy(
+fixed = RequestPolicy(
+    unit_ms=20,
+    replay_count=0,
+    replay_gap=FixedSchedule(1),
+    final_receive_units=0,
+    completion_delivery=False,
+)
+
+linear = RequestPolicy(
     unit_ms=10,
-    replays=4,
-    replay_gap=ExponentialSchedule(initial_units=1, factor=2, maximum_units=8),
-    final_wait_units=1
+    replay_count=3,
+    replay_gap=LinearSchedule(
+        initial_units=1,
+        step_units=1,
+        maximum_units=4,
+    ),
+    final_receive_units=1,
+)
+
+exponential = RequestPolicy(
+    unit_ms=5,
+    replay_count=3,
+    replay_gap=ExponentialSchedule(
+        initial_units=1,
+        factor=2,
+        maximum_units=8,
+    ),
+    final_receive_units=1,
 )
 ```
 
----
-
-## Failure Handling Strategies (`fail_open`)
-
-When all RateLimitly servers are unreachable or fail to respond within the policy horizon:
-
-- **`fail_open=True` (Default)**: Returns `Verdict.ALLOW`. Guarantees application availability during rate limiter or network disruptions.
-- **`fail_open=False`**: Returns `Verdict.FAIL`. Enforces strict fail-closed security for critical operations.
+Validate a policy against a particular credential before using it:
 
 ```python
-# Strict fail-close configuration
-client = RateLimitlyClient(
-    auth_key="rl-aes1...",
-    fail_open=False
-)
+ttl_ms = policy.calculate_horizon_ms(auth_info.dedup_ttl_ms_max)
 ```
+
+The client performs this validation during construction and again before encoding a request.
+
+## Failure handling belongs to the application
+
+`RCLIENT_ERR_TIMEOUT`, `RCLIENT_ERR_DNS`, and `RCLIENT_ERR_IO` mean that no RateLimitly decision is available. The library does not turn such failures into a grant or denial. Framework integrations and applications must explicitly choose their own fail-open, fail-closed, or fallback behavior.

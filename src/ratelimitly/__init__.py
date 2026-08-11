@@ -7,14 +7,14 @@ from .policy import (
     FixedSchedule,
     LinearSchedule,
     ExponentialSchedule,
-    standard_policy,
-    single_round_policy,
-    custom_policy,
+    default_request_policy,
 )
 from .types import (
     ResourceRequest,
     LatencyGuard,
     ServiceLatencyReport,
+    GuardResult,
+    ResourceResult,
     RateLimitResult,
     RCLIENT_OK,
     RCLIENT_ERR_IO,
@@ -26,7 +26,6 @@ from .types import (
     RCLIENT_ERR_NOMEM,
 )
 from .protocol import (
-    compute_identity_hash,
     r_client_derive_bucket_id,
     r_client_derive_latency_tracker_id,
 )
@@ -40,6 +39,8 @@ __all__ = [
     "ResourceRequest",
     "LatencyGuard",
     "ServiceLatencyReport",
+    "GuardResult",
+    "ResourceResult",
     "RateLimitResult",
     "RCLIENT_OK",
     "RCLIENT_ERR_IO",
@@ -54,12 +55,9 @@ __all__ = [
     "FixedSchedule",
     "LinearSchedule",
     "ExponentialSchedule",
-    "standard_policy",
-    "single_round_policy",
-    "custom_policy",
+    "default_request_policy",
     "parse_auth_key",
     "AuthKeyInfo",
-    "compute_identity_hash",
     "r_client_derive_bucket_id",
     "r_client_derive_latency_tracker_id",
 ]

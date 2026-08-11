@@ -1,55 +1,63 @@
-"""Unit tests for HA Request Policy calculations."""
+"""Conformance tests for the unified rl-c-client HA request policy."""
 
 import unittest
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from ratelimitly.policy import (
-    standard_policy,
-    single_round_policy,
-    custom_policy,
+    RequestPolicy,
     FixedSchedule,
     LinearSchedule,
     ExponentialSchedule,
+    default_request_policy,
 )
 
 
 class TestPolicy(unittest.TestCase):
-    def test_standard_policy_horizon(self):
-        pol = standard_policy(unit_ms=20)
-        self.assertEqual(pol.kind, "standard")
-        self.assertEqual(pol.calculate_horizon_ms(), 60)
+    def test_default_policy_matches_c_client(self):
+        policy = default_request_policy()
+        self.assertEqual(policy.unit_ms, 20)
+        self.assertEqual(policy.replay_count, 1)
+        self.assertEqual(policy.replay_gap.get_gap(0), 1)
+        self.assertEqual(policy.replay_gap.get_gap(1), 1)
+        self.assertEqual(policy.final_receive_units, 1)
+        self.assertTrue(policy.completion_delivery)
+        self.assertEqual(policy.calculate_horizon_ms(), 60)
 
-    def test_single_round_policy_horizon(self):
-        pol = single_round_policy(unit_ms=50)
-        self.assertEqual(pol.kind, "single_round")
-        self.assertEqual(pol.calculate_horizon_ms(), 50)
-
-    def test_custom_policy_fixed_schedule(self):
-        pol = custom_policy(
-            unit_ms=10,
-            replays=3,
-            replay_gap=FixedSchedule(2),
-            final_wait_units=2
+    def test_zero_replays_and_no_final_receive_is_one_round(self):
+        policy = RequestPolicy(
+            unit_ms=25,
+            replay_count=0,
+            replay_gap=FixedSchedule(1),
+            final_receive_units=0,
+            completion_delivery=False,
         )
-        self.assertEqual(pol.calculate_horizon_ms(), 80)
+        self.assertEqual(policy.calculate_horizon_ms(), 25)
 
-    def test_linear_schedule_gap(self):
-        sched = LinearSchedule(initial_units=1, step_units=2, maximum_units=5)
-        self.assertEqual(sched.get_gap(0), 1)
-        self.assertEqual(sched.get_gap(1), 3)
-        self.assertEqual(sched.get_gap(2), 5)
-        self.assertEqual(sched.get_gap(3), 5)
+    def test_horizon_includes_initial_round_all_replays_and_final_receive(self):
+        policy = RequestPolicy(
+            unit_ms=10,
+            replay_count=3,
+            replay_gap=FixedSchedule(2),
+            final_receive_units=2,
+        )
+        self.assertEqual(policy.calculate_horizon_ms(), 100)
 
-    def test_exponential_schedule_gap(self):
-        sched = ExponentialSchedule(initial_units=1, factor=2, maximum_units=10)
-        self.assertEqual(sched.get_gap(0), 1)
-        self.assertEqual(sched.get_gap(1), 2)
-        self.assertEqual(sched.get_gap(2), 4)
-        self.assertEqual(sched.get_gap(3), 8)
-        self.assertEqual(sched.get_gap(4), 10)
+    def test_linear_schedule(self):
+        schedule = LinearSchedule(initial_units=1, step_units=2, maximum_units=5)
+        self.assertEqual([schedule.get_gap(index) for index in range(4)], [1, 3, 5, 5])
+
+    def test_exponential_schedule(self):
+        schedule = ExponentialSchedule(initial_units=1, factor=2, maximum_units=10)
+        self.assertEqual([schedule.get_gap(index) for index in range(5)], [1, 2, 4, 8, 10])
+
+    def test_credential_dedup_limit_is_enforced(self):
+        with self.assertRaises(ValueError):
+            default_request_policy(unit_ms=101).calculate_horizon_ms(
+                dedup_ttl_ms_max=300
+            )
 
 
 if __name__ == "__main__":

@@ -1,120 +1,177 @@
-# RateLimitly Low-Level Python API Reference
+# Python API reference
 
-Low-level Python API reference for RateLimitly concepts and data structures.
-
----
-
-## Error Codes (`r_client_error_t`)
-
-| Error Code Constant | Integer Value | Description |
-|---|---|---|
-| `RCLIENT_OK` | `0` | Success. |
-| `RCLIENT_ERR_IO` | `-1` | Socket / Network I/O failure. |
-| `RCLIENT_ERR_TIMEOUT` | `-2` | Timeout waiting for server response. |
-| `RCLIENT_ERR_PROTOCOL` | `-3` | Malformed packet or protocol violation. |
-| `RCLIENT_ERR_AUTH` | `-4` | Authentication / Bech32 parsing error. |
-| `RCLIENT_ERR_DNS` | `-5` | DNS SRV resolution failure. |
-| `RCLIENT_ERR_CONFIG` | `-6` | Invalid configuration parameters. |
-| `RCLIENT_ERR_NOMEM` | `-7` | Memory allocation failure. |
-
----
-
-## Classes & Data Structures
-
-### `RateLimitlyClient` / `AsyncRateLimitlyClient`
+## Client lifecycle
 
 ```python
-class RateLimitlyClient:
-    def __init__(
-        self,
-        auth_key: str,
-        dns_srv: Optional[str] = None,
-        policy: Optional[RequestPolicy] = None
-    ) -> None: ...
-
-    def check_rate_limit(
-        self,
-        resources: List[ResourceRequest],
-        guards: Optional[List[LatencyGuard]] = None,
-        metrics_label: Optional[str] = None
-    ) -> Tuple[int, Optional[RateLimitResult]]: ...
-
-    def report_latency(self, reports: List[ServiceLatencyReport]) -> int: ...
-    def close(self) -> None: ...
+RateLimitlyClient(
+    auth_key: str,
+    dns_srv: str | None = None,
+    policy: RequestPolicy | None = None,
+)
 ```
 
----
+The credential is decoded and its key ID, authentication mode, secret, and quotas are validated at construction. When `dns_srv` is omitted, the client derives `c-<key-id>.p0.ratelimitly.com`.
 
-### `ResourceRequest`
+The client caches DNS results and UDP sockets across calls. It is intentionally lock-free like `rl-c-client`; serialize all operations on one instance. Use one instance per worker when requests can execute concurrently.
+
+```python
+client.close()
+```
+
+`close()` releases sockets and cached discovery state. `RateLimitlyClient` supports `with`; `AsyncRateLimitlyClient` supports `async with`.
+
+## Resource requests
+
+```python
+status, result = client.check_rate_limit(
+    resources: Sequence[ResourceRequest] | None = None,
+    guards: Sequence[LatencyGuard] | None = None,
+    metrics_label: str | None = None,
+)
+```
+
+Resource and guard counts are independent:
+
+| Resources | Guards | Behavior |
+| --- | --- | --- |
+| zero | zero | Local successful no-op; no DNS lookup or packet. |
+| one or more | zero | Rate-bucket consumption request. |
+| zero | one or more | Guard-only server request. |
+| one or more | one or more | Atomic combined decision. |
+
+`status == RCLIENT_OK` and a non-null result means a valid server decision was selected. `result.success` is true only when every returned guard passed and every resource deficit is zero.
 
 ```python
 @dataclass(frozen=True)
 class ResourceRequest:
-    bucket_id: bytes          # 16-byte BLAKE2s bucket digest
-    window_size_ms: int = 60000
-    rate_limit: int = 1000
-    tokens_requested: int = 1
-```
+    bucket_id: bytes          # Exactly 16 bytes.
+    window_size_ms: int       # uint32.
+    rate_limit: int           # uint32.
+    tokens_requested: int     # uint16.
 
----
-
-### `LatencyGuard`
-
-```python
 @dataclass(frozen=True)
 class LatencyGuard:
-    latency_tracker_id: bytes  # 16-byte BLAKE2s tracker digest
-    threshold_ms: int          # Max latency threshold (ms) before load shedding
-    ttl_ms: int = 300000       # Time-to-live for latency tracker (ms)
-    max_samples: int = 64
-    buffer_size: int = 8
-    min_sample_threshold: int = 1
+    latency_tracker_id: bytes # Exactly 16 bytes.
+    threshold_ms: int         # uint32; passes when current latency is smaller.
+    ttl_ms: int               # uint32.
+    max_samples: int          # uint32.
+    buffer_size: int          # uint32; bounded by the credential.
+    min_sample_threshold: int # uint32.
 ```
 
----
+An oversized guard buffer returns `RCLIENT_ERR_PROTOCOL` without sending a packet.
 
-### `ServiceLatencyReport`
-
-```python
-@dataclass(frozen=True)
-class ServiceLatencyReport:
-    latency_tracker_id: bytes  # 16-byte BLAKE2s tracker digest
-    observed_latency_ms: int   # Downstream service latency sample in milliseconds
-    ttl_ms: int = 300000
-    max_samples: int = 64
-    buffer_size: int = 8
-    min_sample_threshold: int = 1
-```
-
----
-
-### `RateLimitResult`
+## Results
 
 ```python
 @dataclass(frozen=True)
 class RateLimitResult:
-    success: bool            # True if granted (all deficits 0 & latency guards passed)
-    server_id: int          # 64-bit ID of responding server
-    remaining_quota: int     # Remaining quota tokens
-    reset_ttl_ms: int        # Milliseconds until quota resets
+    success: bool
+    server_id: int
+    steering_feedback: bool
+    guards: tuple[GuardResult, ...]
+    resources: tuple[ResourceResult, ...]
+
+@dataclass(frozen=True)
+class GuardResult:
+    latency_tracker_id: bytes
+    threshold_ms: int
+    current_latency_ms: int
+    passed: bool
+
+@dataclass(frozen=True)
+class ResourceResult:
+    bucket_id: bytes
+    tokens_deficit: int
+    actual_rate: int
 ```
 
----
+Match result entries by ID rather than array position: a server response can contain a different count or order from the submitted request.
 
-## Identifier Derivation Helpers
+`steering_feedback=True` is the wire “keep port” indication. `False` asks the client to rebind its UDP source port; the Python client closes its persistent sockets after completing that logical request so subsequent sends use newly created sockets.
+
+## Latency reports
 
 ```python
-def r_client_derive_bucket_id(
-    bucket_name: str,
-    window_size_ms: int,
-    rate_limit: int
-) -> bytes: ...
-
-def r_client_derive_latency_tracker_id(
-    service_name: str,
-    ttl_ms: int = 300000,
-    max_samples: int = 64,
-    buffer_size: int = 8,
-    min_sample_threshold: int = 1
-) -> bytes: ...
+status = client.report_latency(reports: Sequence[ServiceLatencyReport])
 ```
+
+```python
+@dataclass(frozen=True)
+class ServiceLatencyReport:
+    latency_tracker_id: bytes
+    observed_latency_ms: int
+    ttl_ms: int
+    max_samples: int
+    buffer_size: int
+    min_sample_threshold: int
+```
+
+A non-empty batch is encoded into one datagram and sent to every discovered r-server. It expects no response. Reports whose `buffer_size` exceeds the credential quota are filtered, matching the C client; if none remain, the call succeeds without sending. An empty input is a configuration error.
+
+Guards and reports are independent. When they refer to the same tracker, repeat the same tracker ID and all four tracker-definition fields. `threshold_ms` belongs only to the guard.
+
+## Canonical content-defined identifiers
+
+Both helpers accept `str` or bytes-like names. A `str` is encoded as UTF-8; bytes-like input is hashed exactly and may include embedded NULs.
+
+```python
+r_client_derive_bucket_id(
+    bucket_name,
+    window_size_ms: int,
+    rate_limit: int,
+) -> bytes
+
+r_client_derive_latency_tracker_id(
+    latency_tracker_name,
+    ttl_ms: int,
+    max_samples: int,
+    buffer_size: int,
+    min_sample_threshold: int,
+) -> bytes
+```
+
+The common formula is:
+
+```text
+preimage = domain_with_final_NUL
+         || uint32_le(name_length)
+         || exact_name_bytes
+         || uint32_le(field_1) || ... || uint32_le(field_n)
+
+id = first_16_bytes(BLAKE2s-256(preimage))
+```
+
+Domains and fields:
+
+| Kind | Domain, including final NUL | Ordered fields |
+| --- | --- | --- |
+| Rate bucket | `ratelimitly.resource.v1\0` | `window_size_ms`, `rate_limit` |
+| Latency tracker | `ratelimitly.latency-tracker.v1\0` | `ttl_ms`, `max_samples`, `buffer_size`, `min_sample_threshold` |
+
+The final NUL is part of the contract because the C implementation hashes `sizeof(domain_array)`. BLAKE2s-256 is computed first and then truncated. `BLAKE2s(digest_size=16)` is a different function and is not conformant.
+
+Known-answer vectors copied from `rl-c-client` v0.6.0 (`a9cfc87`):
+
+| Input | ID, hexadecimal |
+| --- | --- |
+| bucket `checkout`, window `1000`, rate `100` | `f5cf3ad8b8406854b596ba3614f16eff` |
+| tracker `inventory-backend`, TTL `10000`, max `100`, buffer `32`, minimum `5` | `0320bf15b884bda367a17e5ffb650441` |
+| tracker bytes `binary\0tracker`, every field `UINT32_MAX` | `0696ca52a5bfc5e9c46ba90f3110b728` |
+
+Every client language, server-side diagnostic tool, and configuration generator must reproduce these values.
+
+## Status codes
+
+| Constant | Value | Meaning |
+| --- | ---: | --- |
+| `RCLIENT_OK` | 0 | Local success or a parsed server decision. |
+| `RCLIENT_ERR_IO` | -1 | UDP I/O failed. |
+| `RCLIENT_ERR_TIMEOUT` | -2 | Policy horizon ended without a valid response. |
+| `RCLIENT_ERR_PROTOCOL` | -3 | Request, response, quota, or packet contract failed. |
+| `RCLIENT_ERR_AUTH` | -4 | Authentication operation failed. |
+| `RCLIENT_ERR_DNS` | -5 | No usable SRV endpoints were available. |
+| `RCLIENT_ERR_CONFIG` | -6 | Client or call configuration is invalid. |
+| `RCLIENT_ERR_NOMEM` | -7 | Reserved for parity with the C status family. |
+
+Python construction and identifier helpers raise `TypeError` or `ValueError` for invalid direct arguments. Operational methods return status codes.

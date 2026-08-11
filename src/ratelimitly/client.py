@@ -1,210 +1,487 @@
-"""Low-level synchronous and asynchronous RateLimitly client APIs."""
+"""Blocking and asyncio adapters for the C-compatible RateLimitly protocol."""
 
-import socket
-import random
 import asyncio
-from typing import Optional, List, Tuple
-from .auth import parse_auth_key, AuthKeyInfo
-from .policy import RequestPolicy, standard_policy
-from .types import (
-    ResourceRequest,
-    LatencyGuard,
-    ServiceLatencyReport,
-    RateLimitResult,
-    RCLIENT_OK,
-    RCLIENT_ERR_IO,
-    RCLIENT_ERR_TIMEOUT,
-    RCLIENT_ERR_DNS,
-    RCLIENT_ERR_PROTOCOL,
-)
+import os
+import select
+import socket
+import threading
+import time
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+
+from .auth import AuthKeyInfo, parse_auth_key
+from .discovery import ServerEndpoint, discover_server_endpoints
+from .policy import RequestPolicy, default_request_policy
 from .protocol import (
-    compute_identity_hash,
-    pack_evaluation_request,
-    parse_evaluation_response,
+    R_PDU_LATENCY_REPORT,
+    build_authenticated_packet,
+    build_latency_report_body,
+    build_pdu,
+    build_rate_request_body,
+    build_rate_request_pdu,
+    parse_rate_response_packet,
 )
-from .discovery import discover_server_endpoints
+from .types import (
+    LatencyGuard,
+    RateLimitResult,
+    ResourceRequest,
+    ServiceLatencyReport,
+    RCLIENT_ERR_CONFIG,
+    RCLIENT_ERR_DNS,
+    RCLIENT_ERR_AUTH,
+    RCLIENT_ERR_IO,
+    RCLIENT_ERR_PROTOCOL,
+    RCLIENT_ERR_TIMEOUT,
+    RCLIENT_OK,
+)
+
+
+Resolver = Callable[[str], List[ServerEndpoint]]
+Clock = Callable[[], int]
+SocketFactory = Callable[[int, int], socket.socket]
+
+
+def _wall_time_ms() -> int:
+    # Match r_runtime_wall_time_ms(): the wire timestamp and policy deadlines
+    # use Unix wall time in the reference C runtime.
+    return time.time_ns() // 1_000_000
+
+
+def _request_id() -> bytes:
+    value = bytearray(os.urandom(16))
+    value[6] = (value[6] & 0x0F) | 0x40
+    value[8] = (value[8] & 0x3F) | 0x80
+    return bytes(value)
 
 
 class RateLimitlyClient:
-    """Low-level synchronous RateLimitly Client matching r_client_t API."""
+    """Serialized blocking client implementing rl-c-client's request policy."""
 
     def __init__(
         self,
         auth_key: str,
         dns_srv: Optional[str] = None,
-        policy: Optional[RequestPolicy] = None
-    ):
+        policy: Optional[RequestPolicy] = None,
+        *,
+        resolver: Resolver = discover_server_endpoints,
+        clock_ms: Clock = _wall_time_ms,
+        socket_factory: SocketFactory = socket.socket,
+        dns_refresh_interval_ms: int = 300_000,
+    ) -> None:
         self.auth_info: AuthKeyInfo = parse_auth_key(auth_key)
         self.dns_srv = dns_srv or self.auth_info.default_dns_srv
-        self.policy = policy or standard_policy()
-        self._next_req_id = random.randint(1, 1000000)
-        self._endpoints: List[Tuple[str, int]] = []
+        self.policy = policy or default_request_policy()
+        self.policy.calculate_horizon_ms(self.auth_info.dedup_ttl_ms_max)
+        self._resolver = resolver
+        self._clock_ms = clock_ms
+        self._socket_factory = socket_factory
+        if dns_refresh_interval_ms <= 0:
+            raise ValueError("dns_refresh_interval_ms must be positive")
+        self._dns_refresh_interval_ms = dns_refresh_interval_ms
+        self._last_dns_refresh_ms = 0
+        self._dns_refresh_ttl_ms = 0
+        self._endpoints: List[ServerEndpoint] = []
+        self._sockets: Dict[int, socket.socket] = {}
+        self._closed = False
 
-    def _get_next_request_id(self) -> int:
-        self._next_req_id = (self._next_req_id + 1) & 0xFFFFFFFFFFFFFFFF
-        return self._next_req_id
-
-    def _ensure_endpoints(self) -> Tuple[int, List[Tuple[str, int]]]:
-        if not self._endpoints:
-            try:
-                self._endpoints = discover_server_endpoints(self.dns_srv)
-            except Exception:
-                return RCLIENT_ERR_DNS, []
-        if not self._endpoints:
+    def _ensure_endpoints(self) -> Tuple[int, List[ServerEndpoint]]:
+        now_ms = self._clock_ms()
+        refresh_interval_ms = self._dns_refresh_interval_ms
+        if 0 < self._dns_refresh_ttl_ms < refresh_interval_ms:
+            refresh_interval_ms = self._dns_refresh_ttl_ms
+        if self._endpoints and now_ms - self._last_dns_refresh_ms < refresh_interval_ms:
+            return RCLIENT_OK, list(self._endpoints)
+        try:
+            endpoints = self._resolver(self.dns_srv)
+        except Exception:
+            if self._endpoints:
+                return RCLIENT_OK, list(self._endpoints)
             return RCLIENT_ERR_DNS, []
-        return RCLIENT_OK, self._endpoints
+        if not endpoints:
+            if self._endpoints:
+                return RCLIENT_OK, list(self._endpoints)
+            return RCLIENT_ERR_DNS, []
+        self._endpoints = list(endpoints)
+        self._last_dns_refresh_ms = now_ms
+        positive_ttls = [endpoint.ttl_ms for endpoint in endpoints if endpoint.ttl_ms > 0]
+        self._dns_refresh_ttl_ms = min(positive_ttls) if positive_ttls else 0
+        return RCLIENT_OK, list(self._endpoints)
+
+    def _socket_for_family(self, family: int) -> socket.socket:
+        current = self._sockets.get(family)
+        if current is not None:
+            return current
+        current = self._socket_factory(family, socket.SOCK_DGRAM)
+        current.setblocking(False)
+        self._sockets[family] = current
+        return current
+
+    def _close_sockets(self) -> None:
+        for current in self._sockets.values():
+            try:
+                current.close()
+            except OSError:
+                pass
+        self._sockets.clear()
+
+    @staticmethod
+    def _target_responded(
+        target: ServerEndpoint,
+        seen_server_ids: Set[int],
+        seen_addresses: Set[Tuple[int, Tuple]],
+    ) -> bool:
+        if target.server_id is not None:
+            return target.server_id in seen_server_ids
+        return (target.family, target.address) in seen_addresses
+
+    def _send_request(
+        self,
+        endpoints: Sequence[ServerEndpoint],
+        request_id: bytes,
+        pdu: bytes,
+        seen_server_ids: Set[int],
+        seen_addresses: Set[Tuple[int, Tuple]],
+        *,
+        missing_only: bool,
+        best_effort: bool,
+    ) -> int:
+        try:
+            packet = build_authenticated_packet(
+                pdu,
+                self.auth_info,
+                request_id=request_id,
+                timestamp_ms=self._clock_ms(),
+            )
+        except (TypeError, ValueError):
+            return RCLIENT_ERR_PROTOCOL
+        except Exception:
+            return RCLIENT_ERR_AUTH
+        for target in endpoints:
+            if missing_only and self._target_responded(target, seen_server_ids, seen_addresses):
+                continue
+            try:
+                self._socket_for_family(target.family).sendto(packet, target.address)
+            except OSError:
+                if not best_effort:
+                    return RCLIENT_ERR_IO
+        return RCLIENT_OK
+
+    def _receive_until(
+        self,
+        deadline_ms: int,
+        request_id: bytes,
+        allowed_server_ids: Set[int],
+        oldest_server_id: Optional[int],
+        preference_deadline_ms: int,
+        best: Optional[RateLimitResult],
+        seen_server_ids: Set[int],
+        seen_addresses: Set[Tuple[int, Tuple]],
+    ) -> Tuple[Optional[RateLimitResult], bool, bool, int]:
+        """Return (best, selected, rebind_requested, status)."""
+        rebind_requested = False
+        while True:
+            now_ms = self._clock_ms()
+            if best is not None and now_ms >= preference_deadline_ms:
+                return best, True, rebind_requested, RCLIENT_OK
+            if now_ms >= deadline_ms:
+                return best, False, rebind_requested, RCLIENT_OK
+
+            sockets = list(self._sockets.values())
+            if not sockets:
+                return best, False, rebind_requested, RCLIENT_ERR_IO
+            wait_deadline_ms = preference_deadline_ms if best is not None else deadline_ms
+            timeout = max(0.0, (wait_deadline_ms - now_ms) / 1000.0)
+            try:
+                readable, _, _ = select.select(sockets, [], [], timeout)
+            except (OSError, ValueError):
+                return best, False, rebind_requested, RCLIENT_ERR_IO
+            if not readable:
+                continue
+
+            consumed = 0
+            for current in readable:
+                while consumed < 32:
+                    try:
+                        packet, source = current.recvfrom(2048)
+                    except BlockingIOError:
+                        break
+                    except OSError:
+                        return best, False, rebind_requested, RCLIENT_ERR_IO
+                    consumed += 1
+                    try:
+                        response_request_id, result = parse_rate_response_packet(
+                            packet, self.auth_info
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                    if response_request_id != request_id:
+                        continue
+                    if allowed_server_ids and result.server_id not in allowed_server_ids:
+                        continue
+
+                    family = current.family
+                    seen_addresses.add((family, source))
+                    seen_server_ids.add(result.server_id)
+                    if not result.steering_feedback:
+                        rebind_requested = True
+                    if best is None or result.server_id < best.server_id:
+                        best = result
+
+                    now_ms = self._clock_ms()
+                    if oldest_server_id is None or best.server_id == oldest_server_id:
+                        return best, True, rebind_requested, RCLIENT_OK
+                    if now_ms >= preference_deadline_ms:
+                        return best, True, rebind_requested, RCLIENT_OK
+                if consumed >= 32:
+                    break
 
     def check_rate_limit(
         self,
-        resources: List[ResourceRequest],
-        guards: Optional[List[LatencyGuard]] = None,
-        metrics_label: Optional[str] = None
+        resources: Optional[Sequence[ResourceRequest]] = None,
+        guards: Optional[Sequence[LatencyGuard]] = None,
+        metrics_label: Optional[str] = None,
     ) -> Tuple[int, Optional[RateLimitResult]]:
-        """
-        Executes an asynchronous/synchronous rate limit evaluation request.
+        """Evaluate one logical request using the unified C-client policy."""
+        if self._closed:
+            return RCLIENT_ERR_CONFIG, None
+        exact_resources = tuple(resources or ())
+        exact_guards = tuple(guards or ())
 
-        Returns (status: int, result: Optional[RateLimitResult]).
-        - If status == RCLIENT_OK (0), result contains .success, .remaining_quota, .reset_ttl_ms, .server_id.
-        - If status != RCLIENT_OK (negative error code), result is None.
-        """
+        if not exact_resources and not exact_guards:
+            return RCLIENT_OK, RateLimitResult(True, 0, False, (), ())
+        try:
+            oversized_guard = any(
+                guard.buffer_size > self.auth_info.latency_buffer_size_max
+                for guard in exact_guards
+            )
+        except (AttributeError, TypeError):
+            return RCLIENT_ERR_PROTOCOL, None
+        if oversized_guard:
+            return RCLIENT_ERR_PROTOCOL, None
+
+        try:
+            horizon_ms = self.policy.calculate_horizon_ms(
+                self.auth_info.dedup_ttl_ms_max
+            )
+            body = build_rate_request_body(
+                exact_resources, exact_guards, metrics_label
+            )
+            pdu = build_rate_request_pdu(horizon_ms, body)
+        except (TypeError, ValueError):
+            return RCLIENT_ERR_PROTOCOL, None
+
         status, endpoints = self._ensure_endpoints()
         if status != RCLIENT_OK:
             return status, None
 
-        if not resources:
-            return RCLIENT_ERR_PROTOCOL, None
-
-        req_id = self._get_next_request_id()
-        primary_resource = resources[0]
-        bucket_hash = primary_resource.bucket_id
-        count = primary_resource.tokens_requested
-
-        packet = pack_evaluation_request(
-            req_id, bucket_hash, count, self.auth_info.secret
-        )
-
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            timeout_sec = self.policy.calculate_horizon_ms() / 1000.0
-            sock.settimeout(timeout_sec)
+            request_id = _request_id()
         except Exception:
-            return RCLIENT_ERR_IO, None
+            return RCLIENT_ERR_AUTH, None
+        allowed_server_ids = {
+            target.server_id for target in endpoints if target.server_id is not None
+        }
+        if len(allowed_server_ids) != len({target.server_id for target in endpoints}):
+            # At least one target lacked an ID: match C and accept any responder.
+            allowed_server_ids.clear()
+        oldest_server_id = min(allowed_server_ids) if allowed_server_ids else None
+        seen_server_ids: Set[int] = set()
+        seen_addresses: Set[Tuple[int, Tuple]] = set()
+        best: Optional[RateLimitResult] = None
+        rebind_requested = False
+        start_ms = self._clock_ms()
+        round_start_ms = start_ms
 
-        last_error = RCLIENT_ERR_TIMEOUT
-        for target_host, target_port in endpoints:
-            try:
-                sock.sendto(packet, (target_host, target_port))
-                resp_data, _ = sock.recvfrom(2048)
-                parse_status, result = parse_evaluation_response(resp_data, req_id)
-                sock.close()
-                return parse_status, result
-            except socket.timeout:
-                last_error = RCLIENT_ERR_TIMEOUT
-                continue
-            except Exception:
-                last_error = RCLIENT_ERR_IO
-                continue
+        for round_index in range(self.policy.replay_count + 1):
+            duration_ms = self.policy.unit_ms * self.policy.replay_gap.get_gap(round_index)
+            round_deadline_ms = round_start_ms + duration_ms
+            preference_deadline_ms = round_deadline_ms if round_index == 0 else round_start_ms
+            status = self._send_request(
+                endpoints,
+                request_id,
+                pdu,
+                seen_server_ids,
+                seen_addresses,
+                missing_only=round_index > 0,
+                best_effort=False,
+            )
+            if status != RCLIENT_OK:
+                if rebind_requested:
+                    self._close_sockets()
+                return status, None
 
-        sock.close()
-        return last_error, None
+            best, selected, phase_rebind, phase_status = self._receive_until(
+                round_deadline_ms,
+                request_id,
+                allowed_server_ids,
+                oldest_server_id,
+                preference_deadline_ms,
+                best,
+                seen_server_ids,
+                seen_addresses,
+            )
+            rebind_requested = rebind_requested or phase_rebind
+            if phase_status != RCLIENT_OK:
+                if rebind_requested:
+                    self._close_sockets()
+                return phase_status, None
+            if selected and best is not None:
+                break
+            if best is not None:
+                # The first round's preference deadline expired.
+                break
+            round_start_ms = round_deadline_ms
+        if best is None and self.policy.final_receive_units > 0:
+            final_deadline_ms = (
+                round_deadline_ms
+                + self.policy.unit_ms * self.policy.final_receive_units
+            )
+            best, selected, phase_rebind, phase_status = self._receive_until(
+                final_deadline_ms,
+                request_id,
+                allowed_server_ids,
+                oldest_server_id,
+                round_deadline_ms,
+                best,
+                seen_server_ids,
+                seen_addresses,
+            )
+            rebind_requested = rebind_requested or phase_rebind
+            if phase_status != RCLIENT_OK:
+                if rebind_requested:
+                    self._close_sockets()
+                return phase_status, None
 
-    def report_latency(self, reports: List[ServiceLatencyReport]) -> int:
-        """
-        Reports service latency metrics to RateLimitly servers.
+        if best is None:
+            if rebind_requested:
+                self._close_sockets()
+            return RCLIENT_ERR_TIMEOUT, None
 
-        Returns status code (RCLIENT_OK on success or negative error code).
-        """
+        if self.policy.completion_delivery and self._clock_ms() < start_ms + horizon_ms:
+            self._send_request(
+                endpoints,
+                request_id,
+                pdu,
+                seen_server_ids,
+                seen_addresses,
+                missing_only=True,
+                best_effort=True,
+            )
+        if rebind_requested:
+            self._close_sockets()
+        return RCLIENT_OK, best
+
+    def report_latency(self, reports: Sequence[ServiceLatencyReport]) -> int:
+        """Send one fire-and-forget report packet to every discovered server."""
+        if self._closed or not reports:
+            return RCLIENT_ERR_CONFIG
+        try:
+            kept = tuple(
+                report
+                for report in reports
+                if report.buffer_size <= self.auth_info.latency_buffer_size_max
+            )
+        except (AttributeError, TypeError):
+            return RCLIENT_ERR_PROTOCOL
+        if not kept:
+            return RCLIENT_OK
+        try:
+            body = build_latency_report_body(kept)
+            pdu = build_pdu(R_PDU_LATENCY_REPORT, body)
+            request_id = _request_id()
+            packet = build_authenticated_packet(
+                pdu,
+                self.auth_info,
+                request_id=request_id,
+                timestamp_ms=self._clock_ms(),
+            )
+        except (TypeError, ValueError):
+            return RCLIENT_ERR_PROTOCOL
+        except Exception:
+            return RCLIENT_ERR_AUTH
+
         status, endpoints = self._ensure_endpoints()
         if status != RCLIENT_OK:
             return status
+        for target in endpoints:
+            try:
+                self._socket_for_family(target.family).sendto(packet, target.address)
+            except OSError:
+                return RCLIENT_ERR_IO
         return RCLIENT_OK
 
     def close(self) -> None:
-        """Releases client resources."""
-        pass
+        self._close_sockets()
+        self._endpoints.clear()
+        self._closed = True
+
+    def __enter__(self) -> "RateLimitlyClient":
+        return self
+
+    def __exit__(self, _type, _value, _traceback) -> None:
+        self.close()
 
 
 class AsyncRateLimitlyClient:
-    """Low-level asynchronous RateLimitly Client matching asyncio transport API."""
+    """Asyncio adapter preserving the same serialized blocking state machine."""
 
-    def __init__(
-        self,
-        auth_key: str,
-        dns_srv: Optional[str] = None,
-        policy: Optional[RequestPolicy] = None
-    ):
-        self.auth_info: AuthKeyInfo = parse_auth_key(auth_key)
-        self.dns_srv = dns_srv or self.auth_info.default_dns_srv
-        self.policy = policy or standard_policy()
-        self._next_req_id = random.randint(1, 1000000)
-        self._endpoints: List[Tuple[str, int]] = []
+    def __init__(self, *args, **kwargs) -> None:
+        self._client = RateLimitlyClient(*args, **kwargs)
+        self.auth_info = self._client.auth_info
+        self.dns_srv = self._client.dns_srv
+        self.policy = self._client.policy
+        self._lock: Optional[asyncio.Lock] = None
 
-    def _get_next_request_id(self) -> int:
-        self._next_req_id = (self._next_req_id + 1) & 0xFFFFFFFFFFFFFFFF
-        return self._next_req_id
+    async def _run_blocking(self, function, *args):
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def set_result(result) -> None:
+            if not future.done():
+                future.set_result(result)
+
+        def set_exception(error: BaseException) -> None:
+            if not future.done():
+                future.set_exception(error)
+
+        def run() -> None:
+            try:
+                result = function(*args)
+            except BaseException as error:
+                loop.call_soon_threadsafe(set_exception, error)
+            else:
+                loop.call_soon_threadsafe(set_result, result)
+
+        threading.Thread(target=run, daemon=True).start()
+        return await future
+
+    def _serialization_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def check_rate_limit(
         self,
-        resources: List[ResourceRequest],
-        guards: Optional[List[LatencyGuard]] = None,
-        metrics_label: Optional[str] = None
+        resources: Optional[Sequence[ResourceRequest]] = None,
+        guards: Optional[Sequence[LatencyGuard]] = None,
+        metrics_label: Optional[str] = None,
     ) -> Tuple[int, Optional[RateLimitResult]]:
-        """
-        Asynchronously evaluates rate limit requests.
+        async with self._serialization_lock():
+            return await self._run_blocking(
+                self._client.check_rate_limit,
+                resources,
+                guards,
+                metrics_label,
+            )
 
-        Returns (status: int, result: Optional[RateLimitResult]).
-        """
-        if not self._endpoints:
-            try:
-                self._endpoints = discover_server_endpoints(self.dns_srv)
-            except Exception:
-                return RCLIENT_ERR_DNS, None
+    async def report_latency(self, reports: Sequence[ServiceLatencyReport]) -> int:
+        async with self._serialization_lock():
+            return await self._run_blocking(self._client.report_latency, reports)
 
-        if not self._endpoints:
-            return RCLIENT_ERR_DNS, None
+    def close(self) -> None:
+        self._client.close()
 
-        if not resources:
-            return RCLIENT_ERR_PROTOCOL, None
+    async def __aenter__(self) -> "AsyncRateLimitlyClient":
+        return self
 
-        req_id = self._get_next_request_id()
-        primary_resource = resources[0]
-        packet = pack_evaluation_request(
-            req_id, primary_resource.bucket_id, primary_resource.tokens_requested, self.auth_info.secret
-        )
-
-        loop = asyncio.get_event_loop()
-        timeout_sec = self.policy.calculate_horizon_ms() / 1000.0
-
-        last_error = RCLIENT_ERR_TIMEOUT
-        for target_host, target_port in self._endpoints:
-            try:
-                transport, protocol = await asyncio.wait_for(
-                    loop.create_datagram_endpoint(
-                        _AsyncDatagramProtocol,
-                        remote_addr=(target_host, target_port)
-                    ),
-                    timeout=timeout_sec
-                )
-                resp_data = await asyncio.wait_for(
-                    protocol.response_future,
-                    timeout=timeout_sec
-                )
-                transport.close()
-                return parse_evaluation_response(resp_data, req_id)
-            except (asyncio.TimeoutError, Exception):
-                continue
-
-        return last_error, None
-
-
-class _AsyncDatagramProtocol(asyncio.DatagramProtocol):
-    def __init__(self):
-        self.response_future = asyncio.Future()
-
-    def datagram_received(self, data: bytes, addr: Tuple[str, int]):
-        if not self.response_future.done():
-            self.response_future.set_result(data)
-
-    def error_received(self, exc: Exception):
-        if not self.response_future.done():
-            self.response_future.set_exception(exc)
+    async def __aexit__(self, _type, _value, _traceback) -> None:
+        self.close()

@@ -1,182 +1,146 @@
-# RateLimitly Python Client (`ratelimitly`)
+# RateLimitly Python client
 
-Official Python client library for **[RateLimitly](https://ratelimitly.com/)** distributed rate limiting, latency tracking, and adaptive load shedding.
-
----
-
-## What RateLimitly does
-
-[RateLimitly](https://ratelimitly.com/), a distributed admission-control service, decides whether an application may begin work that consumes configured resources. The decision may also depend on whether recently observed service latencies remain below application-defined thresholds.
-
-`ratelimitly` is the official Python library through which an application requests those decisions and, independently, contributes latency measurements used by future decisions.
-
----
-
-## Core operations
+`ratelimitly` is the official Python client for [RateLimitly](https://ratelimitly.com/), a distributed admission-control service. An application asks whether it may begin work that consumes rate-limited resources. The decision can also depend on recent latency observations for services used by that work.
 
 The library exposes two independent operations:
 
-- A **resource request** describes work the application wants to perform as one or more resource consumptions and zero or more latency guards. RateLimitly evaluates the request as one atomic decision. A grant consumes every requested quantity and authorizes the application to proceed; a rejection consumes none.
-- A **latency report** contributes one or more measured service latencies to the trackers used by latency guards in later resource requests. It neither requests nor consumes resources and does not itself make an admission decision.
+- A **resource request** atomically asks to consume quantities from zero or more rate buckets, subject to zero or more latency guards. A successful decision represents consumption of every requested quantity and authorizes the work to proceed.
+- A **latency report** contributes measured service latencies to one or more trackers. It does not request resources or make an admission decision.
 
-An application may use either operation without the other. A common workflow is to request permission for some work, perform it only after a grant, and then optionally report measured latencies for services used by that work.
-
-```mermaid
-flowchart LR
-    Consumer["Resource-consuming application"]:::neutral --> Request["Resource request<br/>intended consumptions + optional guards"]:::neutral
-    Request --> Evaluate["RateLimitly<br/>atomic admission decision"]:::neutral
-    Evaluate --> Decision{"Granted?"}:::neutral
-    Decision -->|No| Rejected["No resources consumed"]:::danger
-    Decision -->|Yes| Granted["Resources consumed<br/>application may perform work"]:::success
-
-    Reporter["Same or another application"]:::neutral --> Report["Optional latency report<br/>measured service latencies"]:::neutral
-    Report --> Trackers["Latency trackers"]:::neutral
-    Trackers -. "input to latency guards" .-> Evaluate
-
-    classDef neutral fill:#EAECEF,stroke:#7D8590,color:#1A1A1A;
-    classDef danger fill:#FCE8E6,stroke:#B0413E,color:#1A1A1A;
-    classDef success fill:#E6F4EA,stroke:#1E7E45,color:#1A1A1A;
-```
-
----
-
-## Features
-
-- **Status Code Errors**: Returns raw status codes (`RCLIENT_OK`, `RCLIENT_ERR_TIMEOUT`, `RCLIENT_ERR_DNS`, etc.) for fine-grained application control.
-- **Latency Guards & Load Shedding**: Evaluates latency guards (`LatencyGuard`) alongside resource requests to automatically shed traffic during downstream service degradation.
-- **Background Latency Reporting**: Reports service response times (`ServiceLatencyReport` via `report_latency()`) to feed RateLimitly's server-side latency trackers.
-- **Bech32 Credential Parser**: Parses `rl-aes1...` and `rl-cookie1...` API keys into key ID, auth mode, and secret bytes.
-- **Identifier Derivation**: `r_client_derive_bucket_id()` and `r_client_derive_latency_tracker_id()` for canonical 16-byte BLAKE2s hashing.
-- **HA Request Policies**: Support for `standard` (3-round), `single_round` (1-round), and `custom` schedules (`FixedSchedule`, `LinearSchedule`, `ExponentialSchedule`).
-- **Sync & Async Interfaces**: Provides both `RateLimitlyClient` and `AsyncRateLimitlyClient` (`asyncio`).
-
----
+An empty resource request succeeds locally. A guard-only request is sent to RateLimitly and evaluated normally.
 
 ## Installation
-
-### From PyPI
 
 ```bash
 pip install ratelimitly
 ```
 
-### Directly from GitHub
+## Request one token
 
-```bash
-pip install git+https://github.com/ratelimitly-com/rl-python-client.git
-```
-
----
-
-## Code Examples
-
-### 1. Basic Resource Request (Synchronous)
+In English, this request means: “Give me one token from the `checkout` bucket whose definition is 100 tokens per 1,000 ms.”
 
 ```python
 from ratelimitly import (
+    RCLIENT_OK,
     RateLimitlyClient,
     ResourceRequest,
-    RCLIENT_OK,
     r_client_derive_bucket_id,
 )
 
-# Initialize client
-client = RateLimitlyClient(auth_key="rl-aes1...")
+window_size_ms = 1_000
+rate_limit = 100
 
-# Derive 16-byte bucket ID
-bucket_id = r_client_derive_bucket_id(
-    bucket_name="api_v1_checkout",
-    window_size_ms=60000,
-    rate_limit=1000
+resource = ResourceRequest(
+    bucket_id=r_client_derive_bucket_id(
+        "checkout",          # Exact application-defined bucket name.
+        window_size_ms,      # Bucket window in milliseconds.
+        rate_limit,          # Tokens available per window.
+    ),
+    window_size_ms=window_size_ms,
+    rate_limit=rate_limit,
+    tokens_requested=1,
 )
 
-# Create resource request
-req = ResourceRequest(bucket_id=bucket_id, tokens_requested=1)
+with RateLimitlyClient("rl-aes1...") as client:
+    status, result = client.check_rate_limit([resource])
 
-# Check rate limit
-status, result = client.check_rate_limit([req])
-
-if status == RCLIENT_OK and result:
-    if result.success:
-        print(f"Request allowed by server {result.server_id}! Quota remaining: {result.remaining_quota}")
-    else:
-        print("Rate limit exceeded (429)")
+if status != RCLIENT_OK:
+    print(f"No decision: client status {status}")
+elif result.success:
+    print("Granted; perform the protected work")
 else:
-    # Handle error (RCLIENT_ERR_TIMEOUT, RCLIENT_ERR_DNS, RCLIENT_ERR_IO)
-    print(f"RateLimitly check failed with status: {status}")
+    print("Denied; do not perform the protected work")
 ```
 
-### 2. Latency Guards (Adaptive Load Shedding)
+`RCLIENT_OK` means a valid RateLimitly decision was received; it does not mean the request was granted. Check `result.success` for the admission decision.
 
-```python
-from ratelimitly import (
-    RateLimitlyClient,
-    ResourceRequest,
-    LatencyGuard,
-    RCLIENT_OK,
-    r_client_derive_bucket_id,
-    r_client_derive_latency_tracker_id,
-)
+## Report one measured latency
 
-client = RateLimitlyClient(auth_key="rl-aes1...")
-
-# 1. Bucket ID for rate limiting
-bucket_id = r_client_derive_bucket_id("api_checkout", 60000, 1000)
-resource_req = ResourceRequest(bucket_id=bucket_id)
-
-# 2. Latency Guard for microservice load shedding (threshold: 200ms)
-tracker_id = r_client_derive_latency_tracker_id("payment_database_service")
-guard = LatencyGuard(
-    latency_tracker_id=tracker_id,
-    threshold_ms=200,      # Max tolerable latency
-    ttl_ms=300000,
-    max_samples=64,
-    buffer_size=8,
-    min_sample_threshold=1
-)
-
-# Check both rate limits and latency guards in a single check
-status, result = client.check_rate_limit([resource_req], guards=[guard])
-
-if status == RCLIENT_OK and result and result.success:
-    print("Allowed: rate limits and latency guards passed!")
-```
-
-### 3. Reporting Latency Metrics
+In English: “Add a 25 ms observation to the `inventory-backend` tracker defined by these storage settings.”
 
 ```python
 from ratelimitly import (
     RateLimitlyClient,
     ServiceLatencyReport,
-    RCLIENT_OK,
     r_client_derive_latency_tracker_id,
 )
 
-client = RateLimitlyClient(auth_key="rl-aes1...")
+ttl_ms = 10_000
+max_samples = 100
+buffer_size = 32
+min_sample_threshold = 5
 
-tracker_id = r_client_derive_latency_tracker_id("payment_database_service")
-
-# Report observed 85ms latency
-report = ServiceLatencyReport(
-    latency_tracker_id=tracker_id,
-    observed_latency_ms=85
+tracker_id = r_client_derive_latency_tracker_id(
+    "inventory-backend",    # Exact application-defined tracker name.
+    ttl_ms,                  # Maximum sample lifetime.
+    max_samples,             # Samples considered by the tracker.
+    buffer_size,             # Requested tracker storage.
+    min_sample_threshold,    # Warm-up samples before guards take effect.
 )
 
-status = client.report_latency([report])
-if status == RCLIENT_OK:
-    print("Latency metric successfully reported!")
+report = ServiceLatencyReport(
+    latency_tracker_id=tracker_id,
+    observed_latency_ms=25,
+    ttl_ms=ttl_ms,
+    max_samples=max_samples,
+    buffer_size=buffer_size,
+    min_sample_threshold=min_sample_threshold,
+)
+
+with RateLimitlyClient("rl-aes1...") as client:
+    status = client.report_latency([report])
 ```
 
----
+Measure the service operation, not the RateLimitly request. Reports are independent of resource requests and may be sent by a different process.
+
+## Add a latency guard
+
+This request asks for the same token only when the tracker’s current latency is below 50 ms:
+
+```python
+from ratelimitly import LatencyGuard
+
+guard = LatencyGuard(
+    latency_tracker_id=tracker_id,       # Same tracker definition as the report.
+    threshold_ms=50,                     # Admission requires current latency < 50 ms.
+    ttl_ms=ttl_ms,
+    max_samples=max_samples,
+    buffer_size=buffer_size,
+    min_sample_threshold=min_sample_threshold,
+)
+
+with RateLimitlyClient("rl-aes1...") as client:
+    status, result = client.check_rate_limit(
+        resources=[resource],
+        guards=[guard],
+    )
+```
+
+## Canonical IDs must agree across clients
+
+Bucket IDs include the exact bucket-name bytes, `window_size_ms`, and `rate_limit`. Latency-tracker IDs include the exact tracker-name bytes, `ttl_ms`, `max_samples`, `buffer_size`, and `min_sample_threshold`; a guard threshold is deliberately not part of the tracker ID.
+
+The Python helpers implement the same domain-separated binary preimage, little-endian integer encoding, BLAKE2s-256 digest, and 16-byte truncation as `rl-c-client` v0.6.0. Do not replace them with hashing of formatted text, and do not use `hashlib.blake2s(..., digest_size=16)`: digest length is a BLAKE2 parameter, so that produces a different ID.
+
+See [API reference](docs/api.md#canonical-content-defined-identifiers) for the exact formula and cross-client known-answer vectors.
+
+## High-availability policy
+
+The default policy matches `rl-c-client`: `unit_ms=20`, one replay, a fixed one-unit round duration, one final receive-only unit, and completion delivery enabled. Its deduplication TTL and maximum decision horizon are 60 ms. The initial transmission goes to every discovered r-server, and the oldest known server’s response wins when it arrives within the first round.
+
+See [configuration](docs/configuration.md) for the complete parametrized policy and [architecture](docs/architecture.md) for wire and selection semantics.
+
+## API layers
+
+`RateLimitlyClient` is blocking. `AsyncRateLimitlyClient` provides the same serialized state machine through `asyncio`. A client preserves DNS results and UDP sockets across calls; call `close()` or use the context-manager forms to release them.
+
+The client returns the same status-code family as the C library. It does not choose an application fail-open or fail-closed policy: the caller decides what to do when no RateLimitly decision is available.
 
 ## Documentation
 
-- [API Reference](docs/api.md): Complete module, class, latency tracking, and method reference.
-- [Architecture & Wire Protocol](docs/architecture.md): Bech32 credential structure, error codes, and binary wire format.
-
-For web documentation and support, visit [ratelimitly.com](https://ratelimitly.com).
-
----
+- [API reference](docs/api.md)
+- [Configuration and request policy](docs/configuration.md)
+- [Architecture, wire format, and conformance](docs/architecture.md)
 
 ## License
 
