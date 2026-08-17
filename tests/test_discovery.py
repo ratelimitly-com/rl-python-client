@@ -11,7 +11,7 @@ from ratelimitly import FixedSchedule, RateLimitlyClient, RequestPolicy, RCLIENT
 from ratelimitly.discovery import ServerEndpoint, server_id_from_target
 
 
-COOKIE_KEY = "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv"
+COOKIE_KEY = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys"
 
 
 class TestDiscovery(unittest.TestCase):

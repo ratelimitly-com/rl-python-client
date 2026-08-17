@@ -33,7 +33,7 @@ from ratelimitly.protocol import (
 )
 
 
-COOKIE_KEY = "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv"
+COOKIE_KEY = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys"
 AUTH = parse_auth_key(COOKIE_KEY)
 
 
