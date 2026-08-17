@@ -4,17 +4,51 @@ import os
 import socket
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from ratelimitly import FixedSchedule, RateLimitlyClient, RequestPolicy, RCLIENT_OK
-from ratelimitly.discovery import ServerEndpoint, server_id_from_target
+from ratelimitly.discovery import (
+    ServerEndpoint,
+    discover_server_endpoints,
+    server_id_from_target,
+)
 
 
 COOKIE_KEY = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys"
 
 
 class TestDiscovery(unittest.TestCase):
+    @patch.dict(os.environ, {"RCLIENT_DNS_SERVER": "127.0.0.1:53535"})
+    @patch("socket.getaddrinfo")
+    @patch("ratelimitly.discovery._dns_resolver")
+    def test_dns_server_override_configures_dnspython_resolver(
+        self, dns_resolver, getaddrinfo
+    ):
+        class Answers(list):
+            pass
+
+        answers = Answers([
+            SimpleNamespace(target="s-10.localhost.", port=38080),
+        ])
+        answers.rrset = SimpleNamespace(ttl=60)
+        resolver = Mock()
+        resolver.resolve.return_value = answers
+        dns_resolver.Resolver.return_value = resolver
+        getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("127.0.0.1", 38080))
+        ]
+
+        endpoints = discover_server_endpoints("rl.glar.com")
+
+        dns_resolver.Resolver.assert_called_once_with(configure=False)
+        self.assertEqual(resolver.nameservers, ["127.0.0.1"])
+        self.assertEqual(resolver.port, 53535)
+        resolver.resolve.assert_called_once_with("_ratelimitly._udp.rl.glar.com", "SRV")
+        self.assertEqual(endpoints[0].server_id, 10)
+
     def test_server_id_is_derived_from_srv_target(self):
         self.assertEqual(
             server_id_from_target("s-414078221156387.c-2.p0.ratelimitly.com."),
