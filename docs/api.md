@@ -63,7 +63,10 @@ class LatencyGuard:
     min_sample_threshold: int # uint32.
 ```
 
-An oversized guard buffer returns `RCLIENT_ERR_PROTOCOL` without sending a packet.
+An oversized guard buffer or resource window returns `RCLIENT_ERR_PROTOCOL`
+before DNS lookup, serialization, or transmission. Resource windows are
+validated against the credential's `rate_window_size_ms_max`; the complete
+logical request fails when any one resource exceeds the limit.
 
 ## Results
 
