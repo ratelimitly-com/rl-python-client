@@ -253,9 +253,13 @@ class RateLimitlyClient:
                 guard.buffer_size > self.auth_info.latency_buffer_size_max
                 for guard in exact_guards
             )
+            oversized_window = any(
+                resource.window_size_ms > self.auth_info.rate_window_size_ms_max
+                for resource in exact_resources
+            )
         except (AttributeError, TypeError):
             return RCLIENT_ERR_PROTOCOL, None
-        if oversized_guard:
+        if oversized_guard or oversized_window:
             return RCLIENT_ERR_PROTOCOL, None
 
         try:

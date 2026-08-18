@@ -10,7 +10,11 @@ client = RateLimitlyClient(
 )
 ```
 
-The credential contains the tenant key ID, a 32-byte cookie or AES-256-GCM key, and quota limits. The client verifies the Bech32 checksum and exact 60-byte payload before accepting it.
+The credential contains format version 1, the API-key ID, a 32-byte cookie or
+AES-256-GCM key, and six quotas packed into one 32-bit word. The client verifies
+the Bech32 checksum, exact 45-byte payload, version, and quota codes before
+accepting it. Legacy unversioned keys and unknown versions are rejected. See
+the normative [wire-protocol credential format](https://github.com/ratelimitly-com/rl/blob/main/docs/spec/wire_protocol.md#api-key-quota-word-format-version-1).
 
 When `dns_srv` is omitted, discovery queries:
 

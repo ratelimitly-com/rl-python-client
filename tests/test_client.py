@@ -33,7 +33,8 @@ from ratelimitly.protocol import (
 )
 
 
-COOKIE_KEY = "rl-cookie1qgqqqqqqqqqqqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqqqqzqqqqsqqqqqsqqqyqqqqqqkqzqqqfn54mv"
+COOKIE_KEY = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys"
+COOKIE_KEY_WITH_1024_MS_RATE_WINDOW = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtrujsv8vz5n"
 AUTH = parse_auth_key(COOKIE_KEY)
 
 
@@ -358,6 +359,20 @@ class TestClient(unittest.TestCase):
         )
         guard = LatencyGuard(b"g" * 16, 50, 1000, 10, 65, 2)
         status, result = client.check_rate_limit(guards=[guard])
+        self.assertEqual(status, RCLIENT_ERR_PROTOCOL)
+        self.assertIsNone(result)
+        self.assertEqual(calls, [])
+        client.close()
+
+    def test_oversized_resource_window_is_rejected_before_dns(self):
+        calls = []
+        client = RateLimitlyClient(
+            COOKIE_KEY_WITH_1024_MS_RATE_WINDOW,
+            policy=policy(),
+            resolver=lambda name: calls.append(name) or [],
+        )
+        resource = ResourceRequest(b"b" * 16, 1025, 100, 1)
+        status, result = client.check_rate_limit([resource])
         self.assertEqual(status, RCLIENT_ERR_PROTOCOL)
         self.assertIsNone(result)
         self.assertEqual(calls, [])

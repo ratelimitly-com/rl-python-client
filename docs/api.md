@@ -10,7 +10,11 @@ RateLimitlyClient(
 )
 ```
 
-The credential is decoded and its key ID, authentication mode, secret, and quotas are validated at construction. When `dns_srv` is omitted, the client derives `c-<key-id>.p0.ratelimitly.com`.
+The credential is decoded and its format version, API-key ID, authentication
+mode, secret, and six quotas are validated at construction. `AuthKeyInfo`
+exposes `format_version`, the five existing quota fields, and
+`rate_window_size_ms_max`. When `dns_srv` is omitted, the client derives
+`c-<key-id>.p0.ratelimitly.com`.
 
 The client caches DNS results and UDP sockets across calls. It is intentionally lock-free like `rl-c-client`; serialize all operations on one instance. Use one instance per worker when requests can execute concurrently.
 
@@ -59,7 +63,10 @@ class LatencyGuard:
     min_sample_threshold: int # uint32.
 ```
 
-An oversized guard buffer returns `RCLIENT_ERR_PROTOCOL` without sending a packet.
+An oversized guard buffer or resource window returns `RCLIENT_ERR_PROTOCOL`
+before DNS lookup, serialization, or transmission. Resource windows are
+validated against the credential's `rate_window_size_ms_max`; the complete
+logical request fails when any one resource exceeds the limit.
 
 ## Results
 

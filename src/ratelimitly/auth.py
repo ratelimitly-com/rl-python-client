@@ -5,11 +5,13 @@ from typing import List, Literal, Tuple
 
 BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 BECH32_REV = {c: i for i, c in enumerate(BECH32_CHARSET)}
+TENANT_KEY_FORMAT_VERSION = 1
 
 
 @dataclass(frozen=True)
 class AuthKeyInfo:
     auth_type: Literal["aes", "cookie"]
+    format_version: int
     key_id: int
     secret: bytes
     rate_buckets_max: int
@@ -17,6 +19,7 @@ class AuthKeyInfo:
     metrics_labels_max: int
     latency_buffer_size_max: int
     dedup_ttl_ms_max: int
+    rate_window_size_ms_max: int
 
     @property
     def default_dns_srv(self) -> str:
@@ -88,6 +91,31 @@ def _convertbits(data: List[int], frombits: int, tobits: int, pad: bool = True) 
     return bytes(ret)
 
 
+def _decode_quota_word(word: int) -> Tuple[int, int, int, int, int, int]:
+    rate_exp = word & 0x1F
+    latency_exp = (word >> 5) & 0x1F
+    labels_exp = (word >> 10) & 0x1F
+    buffer_exp = (word >> 15) & 0x0F
+    dedup_units = (word >> 19) & 0xFF
+    window_exp = (word >> 27) & 0x1F
+
+    if rate_exp > 24:
+        raise ValueError("Invalid packed rate_buckets_max quota")
+    if latency_exp > 24:
+        raise ValueError("Invalid packed latency_services_max quota")
+    if not 1 <= dedup_units <= 200:
+        raise ValueError("Invalid packed dedup_ttl_ms_max quota")
+
+    return (
+        1 << rate_exp,
+        1 << latency_exp,
+        1 << labels_exp,
+        1 << buffer_exp,
+        dedup_units * 10,
+        0xFFFFFFFF if window_exp == 31 else 1 << window_exp,
+    )
+
+
 def parse_auth_key(key_str: str) -> AuthKeyInfo:
     """
     Parses a RateLimitly Bech32 authentication key (rl-aes1... or rl-cookie1...).
@@ -112,18 +140,20 @@ def parse_auth_key(key_str: str) -> AuthKeyInfo:
     payload_5bit = data_5bit[:-6]
     raw_bytes = _convertbits(payload_5bit, 5, 8, pad=False)
 
-    if len(raw_bytes) != 60:
-        raise ValueError(f"Invalid auth key payload length: {len(raw_bytes)} bytes (expected 60)")
+    if len(raw_bytes) != 45:
+        raise ValueError(f"Invalid auth key payload length: {len(raw_bytes)} bytes (expected 45)")
 
-    key_id = int.from_bytes(raw_bytes[:8], byteorder="little")
-    secret = raw_bytes[8:40]
-    quotas = tuple(
-        int.from_bytes(raw_bytes[offset:offset + 4], byteorder="little")
-        for offset in range(40, 60, 4)
-    )
+    format_version = raw_bytes[0]
+    if format_version != TENANT_KEY_FORMAT_VERSION:
+        raise ValueError(f"Unsupported auth key format version: {format_version}")
+
+    key_id = int.from_bytes(raw_bytes[1:9], byteorder="little")
+    secret = raw_bytes[9:41]
+    quotas = _decode_quota_word(int.from_bytes(raw_bytes[41:45], byteorder="little"))
 
     return AuthKeyInfo(
         auth_type=auth_type,
+        format_version=format_version,
         key_id=key_id,
         secret=secret,
         rate_buckets_max=quotas[0],
@@ -131,4 +161,5 @@ def parse_auth_key(key_str: str) -> AuthKeyInfo:
         metrics_labels_max=quotas[2],
         latency_buffer_size_max=quotas[3],
         dedup_ttl_ms_max=quotas[4],
+        rate_window_size_ms_max=quotas[5],
     )
