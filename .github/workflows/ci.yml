@@ -1,16 +1,57 @@
-name: CI
+name: ci
 
 on:
-  pull_request:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile sources and tests
+        run: python -m compileall -q src tests setup.py
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff==0.16.4
+
+      # NARROWED, DELIBERATELY. This repo has never had a linter, so ruff's own
+      # default rule set reports 84 pre-existing violations on main:
+      #   62 FA100 (future-rewritable-type-annotation), 13 I001 (unsorted-imports),
+      #    5 BLE001 (blind-except), 2 PYI034, 1 RUF022, 1 SIM117.
+      # Those are style debt, not defects, and fixing them is not a CI change.
+      # The selection below is the widest set that is genuinely clean on main --
+      # pycodestyle errors (E4/E7/E9), all of pyflakes (F), pycodestyle warnings (W)
+      # and flake8-bugbear (B) -- so this gate is real rather than permanently red.
+      # E5 (line-too-long, 31 hits) is excluded: the repo has no agreed line length.
+      # Widen this selection as the debt above is paid down.
+      - name: Lint with ruff
+        run: ruff check --select E4,E7,E9,F,W,B .
+
   python:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
@@ -27,10 +68,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -49,17 +92,20 @@ jobs:
 
     steps:
       - name: Check out Python client
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check out pinned C reference
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           repository: ratelimitly-com/rl-c-client
           ref: a9cfc87e7eb90a99d77028b18d1079b301cf619c
           path: _reference/rl-c-client
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -85,10 +131,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 

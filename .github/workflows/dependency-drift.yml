@@ -1,0 +1,94 @@
+name: dependency drift
+
+on:
+  schedule:
+    - cron: '7 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-drift
+  cancel-in-progress: true
+
+jobs:
+  c-client-main:
+    name: rl-c-client/main differential conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out Python client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out rl-c-client main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: ratelimitly-com/rl-c-client
+          ref: main
+          path: _reference/rl-c-client
+
+      - name: Record resolved rl-c-client commit
+        run: |
+          echo "rl-c-client/main commit: $(git -C _reference/rl-c-client rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libssl-dev
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Build C reference library
+        run: make -C _reference/rl-c-client librclient.so
+
+      - name: Compare IDs and wire bodies byte-for-byte
+        env:
+          RL_C_CLIENT_LIBRARY: ${{ github.workspace }}/_reference/rl-c-client/librclient.so
+        run: python -m unittest tests.test_c_reference -v
+
+  latest-python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.14 is the newest stable line actions/setup-python serves; 3.15-dev
+        # resolves to the newest 3.15 pre-release in the same manifest.
+        python-version:
+          - "3.14"
+          - "3.15-dev"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+
+      - name: Record resolved interpreter
+        run: |
+          echo "requested ${{ matrix.python-version }}, resolved $(python -VV)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      - name: Run unit and loopback tests
+        run: python -m unittest discover -s tests -v
