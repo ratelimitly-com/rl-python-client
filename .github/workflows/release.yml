@@ -144,11 +144,11 @@ jobs:
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
           {
-            echo "version: $version"
-            echo "tag: $release_tag"
-            echo "commit: $commit"
-            echo "SOURCE_DATE_EPOCH: $epoch"
-            echo "publish: $publish"
+            echo "- version: \`$version\`"
+            echo "- tag: \`$release_tag\`"
+            echo "- commit: \`$commit\`"
+            echo "- SOURCE_DATE_EPOCH: \`$epoch\`"
+            echo "- publish: \`$publish\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   contracts:
@@ -693,6 +693,7 @@ jobs:
             exit 1
           fi
           {
-            echo "published $TAG at $tag_commit"
-            printf '%s\n' "$published"
+            echo "published \`$TAG\` at \`$tag_commit\`"
+            echo
+            printf '%s\n' "$published" | sed 's/^/- `/; s/$/`/'
           } >> "$GITHUB_STEP_SUMMARY"
