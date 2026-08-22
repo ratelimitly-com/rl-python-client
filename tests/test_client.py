@@ -223,6 +223,8 @@ class TestClient(unittest.TestCase):
         status, result = client.check_rate_limit([resource])
         self.assertEqual(status, RCLIENT_OK)
         self.assertEqual(result.server_id, 100)
+        # Partial delivery is counted, never logged per request.
+        self.assertGreaterEqual(client.send_failures().get(100, 0), 1)
         thread.join(1.0)
         client.close()
         current.close()
