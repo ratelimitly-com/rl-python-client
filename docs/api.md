@@ -95,7 +95,15 @@ class ResourceResult:
 
 Match result entries by ID rather than array position: a server response can contain a different count or order from the submitted request.
 
-`steering_feedback=True` is the wire “keep port” indication. `False` asks the client to rebind its UDP source port; the Python client closes its persistent sockets after completing that logical request so subsequent sends use newly created sockets.
+`steering_feedback=True` is the wire “keep port” indication. `False` asks the
+client to rebind its UDP source port after the logical request completes. For
+each active address family, the client binds the replacement before closing the
+old socket and advances monotonically through ports 49152 through 65535. An
+occupied candidate is skipped, the scan covers the complete range, and there is
+no port-zero fallback. Windows replacement sockets set `SO_EXCLUSIVEADDRUSE`
+before binding so a more-specific socket cannot divert replies from the
+wildcard client socket. The async adapter serializes access to this same
+transport and therefore uses the identical steering policy.
 
 ## Latency reports
 
