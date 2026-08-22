@@ -19,6 +19,7 @@ from ratelimitly import (
     ResourceRequest,
     ServiceLatencyReport,
     RCLIENT_ERR_CONFIG,
+    RCLIENT_ERR_IO,
     RCLIENT_ERR_PROTOCOL,
     RCLIENT_ERR_TIMEOUT,
     RCLIENT_OK,
@@ -122,6 +123,34 @@ def responder(current, server_id, build_response, *, drop_count=0, delay=0.0, re
     return thread
 
 
+UNREACHABLE_V6 = "100::1"
+
+
+def unreachable_endpoint(server_id, port):
+    """An endpoint this host cannot send to, sharing a real server's id.
+
+    A dual-stack SRV target expands to one endpoint per address under a single
+    server id, which is how an IPv6 address reaches an IPv4-only host.
+    """
+    return ServerEndpoint(
+        socket.AF_INET6,
+        (UNREACHABLE_V6, port, 0, 0),
+        server_id,
+        f"s-{server_id}.example.test",
+    )
+
+
+def require_unreachable_v6():
+    probe = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    try:
+        probe.sendto(b"\x00", (UNREACHABLE_V6, 9, 0, 0))
+    except OSError:
+        return
+    finally:
+        probe.close()
+    raise unittest.SkipTest(f"this host accepts datagrams addressed to {UNREACHABLE_V6}")
+
+
 class TestClient(unittest.TestCase):
     def test_empty_request_succeeds_locally_without_dns(self):
         calls = []
@@ -169,6 +198,47 @@ class TestClient(unittest.TestCase):
         self.assertEqual(int.from_bytes(received[0][80:84], "little"), 50)
         client.close()
         server.close()
+
+    def test_unreachable_endpoint_does_not_abort_request(self):
+        require_unreachable_v6()
+        current, endpoint = udp_server(100)
+        resource = ResourceRequest(b"b" * 16, 1000, 100, 1)
+        thread = responder(
+            current,
+            100,
+            lambda request_id, server_id: response_packet(
+                request_id, server_id, resource=resource
+            ),
+        )
+        # The unreachable endpoint is listed first, so a successful request
+        # proves the send loop continued past it instead of aborting.
+        client = RateLimitlyClient(
+            COOKIE_KEY,
+            policy=policy(unit_ms=100),
+            resolver=lambda _name: [
+                unreachable_endpoint(100, endpoint.address[1]),
+                endpoint,
+            ],
+        )
+        status, result = client.check_rate_limit([resource])
+        self.assertEqual(status, RCLIENT_OK)
+        self.assertEqual(result.server_id, 100)
+        thread.join(1.0)
+        client.close()
+        current.close()
+
+    def test_request_fails_when_every_endpoint_is_unreachable(self):
+        require_unreachable_v6()
+        resource = ResourceRequest(b"b" * 16, 1000, 100, 1)
+        client = RateLimitlyClient(
+            COOKIE_KEY,
+            policy=policy(unit_ms=100),
+            resolver=lambda _name: [unreachable_endpoint(100, 9)],
+        )
+        status, result = client.check_rate_limit([resource])
+        self.assertEqual(status, RCLIENT_ERR_IO)
+        self.assertIsNone(result)
+        client.close()
 
     def test_oldest_known_server_wins_during_first_round(self):
         older, older_endpoint = udp_server(100)

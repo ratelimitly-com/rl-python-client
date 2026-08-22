@@ -1,6 +1,7 @@
 """Blocking and asyncio adapters for the C-compatible RateLimitly protocol."""
 
 import asyncio
+import logging
 import os
 import select
 import socket
@@ -34,6 +35,9 @@ from .types import (
     RCLIENT_OK,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
+
 
 Resolver = Callable[[str], List[ServerEndpoint]]
 Clock = Callable[[], int]
@@ -51,6 +55,25 @@ def _request_id() -> bytes:
     value[6] = (value[6] & 0x0F) | 0x40
     value[8] = (value[8] & 0x3F) | 0x80
     return bytes(value)
+
+
+
+def _report_partial_delivery(what: str, delivered: int, attempted: int) -> None:
+    """Warn that a send reached some endpoints but not all of them.
+
+    Partial delivery is otherwise invisible: the call still reports RCLIENT_OK
+    through the endpoints that worked, while the HA path selects the oldest
+    replica's answer, so losing the oldest replica silently downgrades the
+    result. Total failure is not logged here - the caller already gets
+    RCLIENT_ERR_IO for that.
+    """
+    _LOGGER.warning(
+        "%s reached %d of %d endpoints (%d unreachable)",
+        what,
+        delivered,
+        attempted,
+        attempted - delivered,
+    )
 
 
 class RateLimitlyClient:
@@ -155,14 +178,25 @@ class RateLimitlyClient:
             return RCLIENT_ERR_PROTOCOL
         except Exception:
             return RCLIENT_ERR_AUTH
+        # One unreachable endpoint must not discard the endpoints behind it: a
+        # dual-stack SRV target expands to one endpoint per address sharing a
+        # server id, so an IPv6 address on an IPv4-only host would otherwise
+        # fail every request. Report an error only if nothing got out at all.
+        attempted = 0
+        delivered = 0
         for target in endpoints:
             if missing_only and self._target_responded(target, seen_server_ids, seen_addresses):
                 continue
+            attempted += 1
             try:
                 self._socket_for_family(target.family).sendto(packet, target.address)
             except OSError:
-                if not best_effort:
-                    return RCLIENT_ERR_IO
+                continue
+            delivered += 1
+        if not best_effort and attempted > 0 and delivered == 0:
+            return RCLIENT_ERR_IO
+        if not best_effort and 0 < delivered < attempted:
+            _report_partial_delivery("rate request", delivered, attempted)
         return RCLIENT_OK
 
     def _receive_until(
@@ -406,11 +440,17 @@ class RateLimitlyClient:
         status, endpoints = self._ensure_endpoints()
         if status != RCLIENT_OK:
             return status
+        delivered = 0
         for target in endpoints:
             try:
                 self._socket_for_family(target.family).sendto(packet, target.address)
             except OSError:
-                return RCLIENT_ERR_IO
+                continue
+            delivered += 1
+        if endpoints and delivered == 0:
+            return RCLIENT_ERR_IO
+        if 0 < delivered < len(endpoints):
+            _report_partial_delivery("latency report", delivered, len(endpoints))
         return RCLIENT_OK
 
     def close(self) -> None:
