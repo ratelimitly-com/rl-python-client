@@ -144,3 +144,48 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build
+
+  # The only job that talks to production. It is pinned to main because secrets
+  # are unavailable to fork pull requests, and to a single actor on manual
+  # dispatch because every run spends real tenant quota. It never shares a
+  # concurrency group with anything else and is never cancelled mid-exchange.
+  # tests/production_smoke.py is deliberately not a test_*.py module, so
+  # `unittest discover` in the jobs above cannot reach production.
+  production-smoke:
+    name: Production protocol smoke
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' &&
+        github.actor == 'edescourtis'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: rl-python-client-production-smoke
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+
+      # The credential is a step-level environment variable so no other step can
+      # observe it, and the probe never copies it into diagnostics. A missing
+      # secret expands to an empty string and the probe exits non-zero: this job
+      # must never report green without having reached production.
+      - name: Prove key-only rate and latency behavior
+        env:
+          RATELIMITLY_AUTH_KEY: ${{ secrets.RATELIMITLY_AUTH_KEY }}
+          RATELIMITLY_P0_TEST_NAMESPACE: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python tests/production_smoke.py
