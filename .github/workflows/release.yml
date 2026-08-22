@@ -1,0 +1,698 @@
+name: release
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+      - 'README.md'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'src/**'
+      - 'tests/**'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Nothing in a release build may depend on wall-clock time, hash randomisation,
+  # or pip's network chatter -- the artifacts have to come out byte-identical.
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONHASHSEED: "0"
+  # The interpreter that builds the shipped artifacts, and the oldest interpreter
+  # they are claimed to run on. `contracts` asserts the floor matches
+  # `requires-python` and that ci.yml actually tests it.
+  PYTHON_BUILD_VERSION: "3.12"
+  PYTHON_FLOOR_VERSION: "3.8"
+  # Pinned so the build backend cannot drift. setuptools 80.9.0 and 84.0.0 emit
+  # different wheel bytes for identical sources, so `--no-isolation` plus an
+  # exact pin is what makes the release reproducible over time, not just within
+  # a single run.
+  BUILD_VERSION: "1.3.0"
+  SETUPTOOLS_VERSION: "80.9.0"
+  WHEEL_VERSION: "0.45.1"
+  TWINE_VERSION: "6.2.0"
+  PYYAML_VERSION: "6.0.3"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.metadata.outputs.commit }}
+      epoch: ${{ steps.metadata.outputs.epoch }}
+      publish: ${{ steps.metadata.outputs.publish }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_BUILD_VERSION }}
+
+      - name: Resolve immutable build metadata
+        id: metadata
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          canonical_version="$(
+            python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])'
+          )"
+          if [[ ! "$canonical_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "pyproject.toml [project] version must be numeric MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          commit="$(git rev-parse HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          release_tag="v${canonical_version}"
+          publish=false
+
+          tag_exists() {
+            git ls-remote --exit-code --tags \
+              origin "refs/tags/${release_tag}" >/dev/null 2>&1
+          }
+
+          verify_tag_commit() {
+            git fetch --no-tags origin \
+              "+refs/tags/${release_tag}:refs/tags/${release_tag}"
+            tag_commit="$(git rev-list -n 1 "refs/tags/${release_tag}")"
+            if [[ "$tag_commit" != "$commit" ]]; then
+              echo "$release_tag points to $tag_commit, expected $commit" >&2
+              exit 1
+            fi
+          }
+
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              [[ "$GITHUB_REF" == refs/heads/main ]]
+              if gh release view "$release_tag" >/dev/null 2>&1; then
+                state="$(
+                  gh release view "$release_tag" \
+                    --json isDraft \
+                    --jq .isDraft
+                )"
+                if [[ "$state" == true ]]; then
+                  # A draft has no git tag until it is published, so only verify
+                  # a tag that already exists.
+                  if tag_exists; then
+                    verify_tag_commit
+                  fi
+                  publish=true
+                else
+                  echo "$release_tag already published; bump pyproject.toml version for the next release"
+                fi
+              elif tag_exists; then
+                verify_tag_commit
+                publish=true
+              else
+                publish=true
+              fi
+              ;;
+            workflow_dispatch|pull_request)
+              ;;
+            *)
+              echo "unsupported release event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          version="$canonical_version"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$epoch" =~ ^[0-9]+$ ]]
+          {
+            echo "commit=$commit"
+            echo "epoch=$epoch"
+            echo "publish=$publish"
+            echo "tag=$release_tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "version: $version"
+            echo "tag: $release_tag"
+            echo "commit: $commit"
+            echo "SOURCE_DATE_EPOCH: $epoch"
+            echo "publish: $publish"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  contracts:
+    name: Focused release contracts
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_BUILD_VERSION }}
+
+      - name: Install contract dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "PyYAML==$PYYAML_VERSION"
+
+      - name: Run focused release contract checks
+        shell: python
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          import os
+          import pathlib
+          import re
+          import tomllib
+
+          import yaml
+
+          failures = []
+
+          def require(condition, message):
+              if not condition:
+                  failures.append(message)
+
+          expected_version = os.environ["VERSION"]
+          floor = os.environ["PYTHON_FLOOR_VERSION"]
+          pyproject = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+          )
+          project = pyproject["project"]
+          declared = project["version"]
+
+          # Asset names in `aggregate` and `publish` are built from this name.
+          require(
+              project["name"] == "ratelimitly",
+              f"[project] name is {project['name']!r}, expected 'ratelimitly'",
+          )
+          require(
+              re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", declared) is not None,
+              f"[project] version {declared!r} is not MAJOR.MINOR.PATCH",
+          )
+          require(
+              declared == expected_version,
+              f"[project] version {declared!r} does not match the resolved"
+              f" release version {expected_version!r}",
+          )
+
+          init = pathlib.Path("src/ratelimitly/__init__.py").read_text(encoding="utf-8")
+          runtime = re.search(r'^__version__ = "([^"]+)"$', init, re.MULTILINE)
+          require(runtime is not None, "src/ratelimitly/__init__.py defines no __version__")
+          if runtime is not None:
+              require(
+                  runtime.group(1) == declared,
+                  f"__version__ {runtime.group(1)!r} does not match"
+                  f" [project] version {declared!r}",
+              )
+
+          # twine check --strict validates the long description, so both the
+          # readme and the license have to be declared.
+          require("readme" in project, "[project] readme is not declared")
+          require("license" in project, "[project] license is not declared")
+
+          require(
+              project.get("requires-python") == f">={floor}",
+              f"requires-python is {project.get('requires-python')!r} but release.yml"
+              f" verifies the artifacts on Python {floor}",
+          )
+
+          # A single py3-none-any wheel is only correct for a pure-Python project.
+          require(
+              "ext-modules" not in pyproject.get("tool", {}).get("setuptools", {}),
+              "[tool.setuptools] ext-modules is set; the release ships one universal wheel",
+          )
+          require(
+              "ext_modules" not in pathlib.Path("setup.py").read_text(encoding="utf-8"),
+              "setup.py declares ext_modules; the release ships one universal wheel",
+          )
+          compiled = sorted(
+              str(path)
+              for path in pathlib.Path("src").rglob("*")
+              if path.suffix in {".c", ".cc", ".cpp", ".cxx", ".pyx", ".pxd", ".so", ".pyd"}
+          )
+          require(not compiled, f"compiled-extension sources under src/: {compiled}")
+
+          # The floor we advertise has to be a floor CI actually exercises.
+          ci = yaml.safe_load(
+              pathlib.Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+          )
+          tested = [
+              str(version)
+              for version in ci["jobs"]["python"]["strategy"]["matrix"]["python-version"]
+          ]
+          require(
+              floor in tested,
+              f"ci.yml does not test Python {floor}; it tests {tested}",
+          )
+
+          for failure in failures:
+              print(f"release contract failed: {failure}")
+          raise SystemExit(1 if failures else 0)
+
+  build:
+    name: Reproducible distributions
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: |
+            ${{ env.PYTHON_FLOOR_VERSION }}
+            ${{ env.PYTHON_BUILD_VERSION }}
+
+      - name: Install pinned build toolchain
+        run: |
+          set -euo pipefail
+          "python$PYTHON_BUILD_VERSION" -m pip install --upgrade pip
+          "python$PYTHON_BUILD_VERSION" -m pip install \
+            "build==$BUILD_VERSION" \
+            "setuptools==$SETUPTOOLS_VERSION" \
+            "wheel==$WHEEL_VERSION" \
+            "twine==$TWINE_VERSION"
+
+      - name: Build the distributions twice from pristine trees
+        shell: bash
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+        run: |
+          set -euo pipefail
+          for pass in 1 2; do
+            rm -rf "$RUNNER_TEMP/tree" "$RUNNER_TEMP/dist-$pass"
+            mkdir -p "$RUNNER_TEMP/tree" "$RUNNER_TEMP/dist-$pass"
+            # Build from the committed tree only, at the same path each pass, so
+            # nothing untracked and no directory name can leak into the output.
+            git archive HEAD | tar -x -C "$RUNNER_TEMP/tree"
+            (
+              cd "$RUNNER_TEMP/tree"
+              "python$PYTHON_BUILD_VERSION" -m build \
+                --no-isolation \
+                --outdir "$RUNNER_TEMP/dist-$pass"
+            )
+          done
+
+      - name: Normalise the sdists and prove both passes are byte-identical
+        shell: python
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+        run: |
+          import gzip
+          import hashlib
+          import io
+          import os
+          import pathlib
+          import tarfile
+
+          epoch = int(os.environ["SOURCE_DATE_EPOCH"])
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+
+          def normalise(path):
+              """Rewrite an sdist with deterministic metadata.
+
+              setuptools honours SOURCE_DATE_EPOCH for wheels but not for sdists:
+              it stamps tar members with the wall clock and the gzip wrapper with
+              the current time and the original filename. The member payloads are
+              already identical, so rewriting the container -- sorted members,
+              fixed mtimes, no owner, no gzip header timestamp -- is what makes
+              the sdist reproducible. This is idempotent.
+              """
+              with tarfile.open(path, "r:gz") as archive:
+                  members = archive.getmembers()
+                  payloads = {
+                      member.name: archive.extractfile(member).read()
+                      for member in members
+                      if member.isfile()
+                  }
+              plain = io.BytesIO()
+              with tarfile.open(
+                  fileobj=plain, mode="w", format=tarfile.PAX_FORMAT
+              ) as rewritten:
+                  for member in sorted(members, key=lambda entry: entry.name):
+                      if not (member.isfile() or member.isdir()):
+                          raise SystemExit(
+                              f"unexpected member type in {path.name}: {member.name}"
+                          )
+                      member.mtime = epoch
+                      member.uid = 0
+                      member.gid = 0
+                      member.uname = ""
+                      member.gname = ""
+                      member.pax_headers = {}
+                      if member.isdir():
+                          member.mode = 0o755
+                          rewritten.addfile(member)
+                      else:
+                          member.mode = 0o755 if member.mode & 0o111 else 0o644
+                          rewritten.addfile(member, io.BytesIO(payloads[member.name]))
+              with open(path, "wb") as handle:
+                  compressed = gzip.GzipFile(
+                      filename="", fileobj=handle, mode="wb", compresslevel=9, mtime=0
+                  )
+                  compressed.write(plain.getvalue())
+                  compressed.close()
+
+          digests = {}
+          for pass_number in ("1", "2"):
+              directory = temp / f"dist-{pass_number}"
+              for sdist in sorted(directory.glob("*.tar.gz")):
+                  normalise(sdist)
+              digests[pass_number] = {
+                  path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in sorted(directory.iterdir())
+              }
+
+          if digests["1"] != digests["2"]:
+              print("the two build passes are not byte-identical")
+              for name in sorted(set(digests["1"]) | set(digests["2"])):
+                  print(f"  {name}")
+                  print(f"    pass 1: {digests['1'].get(name)}")
+                  print(f"    pass 2: {digests['2'].get(name)}")
+              raise SystemExit(1)
+
+          summary = pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("reproducible across two independent build passes:\n\n")
+              for name, digest in sorted(digests["1"].items()):
+                  handle.write(f"- `{digest}  {name}`\n")
+                  print(f"{digest}  {name}")
+
+      - name: Check distribution metadata with twine
+        shell: bash
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-dist"
+          cp "$RUNNER_TEMP/dist-1/ratelimitly-$VERSION.tar.gz" "$RUNNER_TEMP/release-dist/"
+          cp "$RUNNER_TEMP/dist-1/ratelimitly-$VERSION-py3-none-any.whl" "$RUNNER_TEMP/release-dist/"
+          test "$(find "$RUNNER_TEMP/dist-1" -type f | wc -l)" -eq 2
+          "python$PYTHON_BUILD_VERSION" -m twine check --strict \
+            "$RUNNER_TEMP/release-dist/ratelimitly-$VERSION.tar.gz" \
+            "$RUNNER_TEMP/release-dist/ratelimitly-$VERSION-py3-none-any.whl"
+
+      - name: Install both distributions on the floor and build interpreters
+        shell: bash
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          for series in "$PYTHON_FLOOR_VERSION" "$PYTHON_BUILD_VERSION"; do
+            for artifact in \
+              "$RUNNER_TEMP/release-dist/ratelimitly-$VERSION.tar.gz" \
+              "$RUNNER_TEMP/release-dist/ratelimitly-$VERSION-py3-none-any.whl"; do
+              venv="$RUNNER_TEMP/verify-$series-$(basename "$artifact")"
+              rm -rf "$venv"
+              "python$series" -m venv "$venv"
+              "$venv/bin/python" -m pip install --quiet --upgrade pip
+              "$venv/bin/python" -m pip install --quiet "$artifact"
+              installed="$("$venv/bin/python" -c 'import ratelimitly;print(ratelimitly.__version__)')"
+              if [[ "$installed" != "$VERSION" ]]; then
+                echo "$(basename "$artifact") installed __version__ $installed on Python $series, expected $VERSION" >&2
+                exit 1
+              fi
+              echo "python $series: $(basename "$artifact") installs and imports at $installed"
+            done
+          done
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dist
+          path: ${{ runner.temp }}/release-dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  aggregate:
+    name: Validate complete release
+    needs:
+      - metadata
+      - contracts
+      - build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_BUILD_VERSION }}
+
+      - name: Download every release artifact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/release-inputs
+
+      - name: Reject partial or unexpected release sets
+        shell: python
+        env:
+          SOURCE_DATE_EPOCH: ${{ needs.metadata.outputs.epoch }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          import os
+          import pathlib
+          import shutil
+
+          version = os.environ["VERSION"]
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          inputs = temp / "release-inputs"
+          output = temp / "release-assets"
+
+          # The complete, exact set. ratelimitly is pure Python, so one universal
+          # wheel covers every platform and there is nothing else to wait for.
+          expected = {
+              f"ratelimitly-{version}-py3-none-any.whl",
+              f"ratelimitly-{version}.tar.gz",
+          }
+
+          found = {}
+          for path in sorted(inputs.rglob("*")):
+              if not path.is_file():
+                  continue
+              if path.name in found:
+                  print(f"duplicate release asset: {path.name}")
+                  raise SystemExit(1)
+              found[path.name] = path
+
+          missing = sorted(expected - set(found))
+          unexpected = sorted(set(found) - expected)
+          for name in missing:
+              print(f"missing release asset: {name}")
+          for name in unexpected:
+              print(f"unexpected release asset: {name}")
+          if missing or unexpected:
+              raise SystemExit(1)
+
+          output.mkdir(parents=True, exist_ok=True)
+          for name in sorted(expected):
+              shutil.copy2(found[name], output / name)
+              print(f"accepted {name}")
+
+      - name: Re-check metadata and write SHA256SUMS
+        shell: bash
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "twine==$TWINE_VERSION"
+          cd "$RUNNER_TEMP/release-assets"
+          python -m twine check --strict \
+            "ratelimitly-$VERSION.tar.gz" \
+            "ratelimitly-$VERSION-py3-none-any.whl"
+          sha256sum \
+            "ratelimitly-$VERSION-py3-none-any.whl" \
+            "ratelimitly-$VERSION.tar.gz" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+          {
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  attest:
+    name: Attest release assets
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.metadata.outputs.publish == 'true'
+    needs:
+      - metadata
+      - aggregate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download exact release assets
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create build provenance attestations
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: 'release-assets/*'
+
+  publish:
+    name: Publish atomic GitHub release
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.metadata.outputs.publish == 'true'
+    needs:
+      - metadata
+      - aggregate
+      - attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download exact release assets
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Upload to a draft, verify, then publish
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.metadata.outputs.commit }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          sdist="ratelimitly-$VERSION.tar.gz"
+          wheel="ratelimitly-$VERSION-py3-none-any.whl"
+          expected="$(printf '%s\n' "SHA256SUMS" "$sdist" "$wheel" | LC_ALL=C sort)"
+
+          for asset in "SHA256SUMS" "$sdist" "$wheel"; do
+            test -f "release-assets/$asset"
+          done
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            state="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            if [[ "$state" != true ]]; then
+              echo "$TAG is already published; refusing to overwrite it" >&2
+              exit 1
+            fi
+            # A failed earlier attempt can leave a half-uploaded draft behind.
+            # Drafts carry no git tag, so removing one publishes nothing.
+            gh release delete "$TAG" --yes
+          fi
+
+          {
+            echo "Automated release of \`ratelimitly\` $VERSION, built from \`$COMMIT\`."
+            echo
+            echo "Assets:"
+            echo
+            echo "- \`$sdist\` -- source distribution"
+            echo "- \`$wheel\` -- universal wheel (pure Python, every platform)"
+            echo "- \`SHA256SUMS\` -- checksums for the two distributions"
+            echo
+            echo "Both distributions are byte-reproducible from this commit and carry"
+            echo "GitHub build provenance attestations."
+            echo
+            echo "This release publishes GitHub assets only. The package is not uploaded"
+            echo "to PyPI."
+          } > "$RUNNER_TEMP/notes.md"
+
+          gh release create "$TAG" \
+            --draft \
+            --target "$COMMIT" \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "release-assets/$sdist" \
+            "release-assets/$wheel" \
+            "release-assets/SHA256SUMS"
+
+          uploaded="$(gh release view "$TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          if [[ "$uploaded" != "$expected" ]]; then
+            echo "draft $TAG does not carry the exact release asset set" >&2
+            echo "expected:" >&2
+            printf '%s\n' "$expected" >&2
+            echo "uploaded:" >&2
+            printf '%s\n' "$uploaded" >&2
+            exit 1
+          fi
+
+          # Pull the assets back out of the draft and re-verify the bytes, so a
+          # truncated upload cannot become a published release.
+          rm -rf "$RUNNER_TEMP/verify"
+          mkdir -p "$RUNNER_TEMP/verify"
+          gh release download "$TAG" --dir "$RUNNER_TEMP/verify"
+          cmp "release-assets/SHA256SUMS" "$RUNNER_TEMP/verify/SHA256SUMS"
+          (cd "$RUNNER_TEMP/verify" && sha256sum -c SHA256SUMS)
+
+          gh release edit "$TAG" --draft=false
+
+          state="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+          if [[ "$state" != false ]]; then
+            echo "$TAG is still a draft after publishing" >&2
+            exit 1
+          fi
+          tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
+          if [[ "$tag_commit" != "$COMMIT" ]]; then
+            echo "$TAG points to $tag_commit, expected $COMMIT" >&2
+            exit 1
+          fi
+          published="$(gh release view "$TAG" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+          if [[ "$published" != "$expected" ]]; then
+            echo "published $TAG does not carry the exact release asset set" >&2
+            exit 1
+          fi
+          {
+            echo "published $TAG at $tag_commit"
+            printf '%s\n' "$published"
+          } >> "$GITHUB_STEP_SUMMARY"
