@@ -101,7 +101,16 @@ def response_packet(
     )
 
 
-def responder(current, server_id, build_response, *, drop_count=0, delay=0.0, received=None):
+def responder(
+    current,
+    server_id,
+    build_response,
+    *,
+    drop_count=0,
+    delay=0.0,
+    received=None,
+    source_addresses=None,
+):
     def run():
         try:
             for _ in range(drop_count):
@@ -111,6 +120,8 @@ def responder(current, server_id, build_response, *, drop_count=0, delay=0.0, re
             packet, address = current.recvfrom(2048)
             if received is not None:
                 received.append(packet)
+            if source_addresses is not None:
+                source_addresses.append(address)
             if delay:
                 time.sleep(delay)
             current.sendto(build_response(packet[12:28], server_id), address)
@@ -289,9 +300,10 @@ class TestClient(unittest.TestCase):
         client.close()
         server.close()
 
-    def test_keep_port_false_releases_persistent_socket(self):
+    def test_keep_port_false_rebinds_persistent_socket(self):
         server, endpoint = udp_server(10)
         resource = ResourceRequest(b"b" * 16, 1000, 100, 1)
+        first_sources = []
         thread = responder(
             server,
             10,
@@ -301,6 +313,7 @@ class TestClient(unittest.TestCase):
                 resource=resource,
                 steering_feedback=False,
             ),
+            source_addresses=first_sources,
         )
         client = RateLimitlyClient(
             COOKIE_KEY,
@@ -310,8 +323,28 @@ class TestClient(unittest.TestCase):
         status, result = client.check_rate_limit([resource])
         self.assertEqual(status, RCLIENT_OK)
         self.assertFalse(result.steering_feedback)
-        self.assertEqual(client._sockets, {})
+        self.assertIn(socket.AF_INET, client._sockets)
+        replacement_port = client._sockets[socket.AF_INET].getsockname()[1]
+        self.assertNotEqual(replacement_port, first_sources[0][1])
+
+        second_sources = []
+        second_thread = responder(
+            server,
+            10,
+            lambda request_id, server_id: response_packet(
+                request_id,
+                server_id,
+                resource=resource,
+                steering_feedback=True,
+            ),
+            source_addresses=second_sources,
+        )
+        status, result = client.check_rate_limit([resource])
+        self.assertEqual(status, RCLIENT_OK)
+        self.assertTrue(result.steering_feedback)
+        self.assertEqual(second_sources[0][1], replacement_port)
         thread.join(1.0)
+        second_thread.join(1.0)
         client.close()
         server.close()
 
