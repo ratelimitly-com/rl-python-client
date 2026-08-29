@@ -59,14 +59,11 @@ class LatencyGuard:
     threshold_ms: int         # uint32; passes when current latency is smaller.
     ttl_ms: int               # uint32.
     max_samples: int          # uint32.
-    buffer_size: int          # uint32; bounded by the credential.
     min_sample_threshold: int # uint32.
 ```
 
-An oversized guard buffer or resource window returns `RCLIENT_ERR_PROTOCOL`
-before DNS lookup, serialization, or transmission. Resource windows are
-validated against the credential's `rate_window_size_ms_max`; the complete
-logical request fails when any one resource exceeds the limit.
+Resource windows are validated against the credential's `rate_window_size_ms_max`;
+the complete logical request fails when any one resource exceeds the limit.
 
 ## Results
 
@@ -118,13 +115,12 @@ class ServiceLatencyReport:
     observed_latency_ms: int
     ttl_ms: int
     max_samples: int
-    buffer_size: int
     min_sample_threshold: int
 ```
 
-A non-empty batch is encoded into one datagram and sent to every discovered r-server. It expects no response. Reports whose `buffer_size` exceeds the credential quota are filtered, matching the C client; if none remain, the call succeeds without sending. An empty input is a configuration error.
+A non-empty batch is encoded into one datagram and sent to every discovered r-server. It expects no response. An empty input is a configuration error.
 
-Guards and reports are independent. When they refer to the same tracker, repeat the same tracker ID and all four tracker-definition fields. `threshold_ms` belongs only to the guard.
+Guards and reports are independent. When they refer to the same tracker, repeat the same tracker ID and all tracker-definition fields. `threshold_ms` belongs only to the guard.
 
 ## Canonical content-defined identifiers
 
@@ -141,7 +137,6 @@ r_client_derive_latency_tracker_id(
     latency_tracker_name,
     ttl_ms: int,
     max_samples: int,
-    buffer_size: int,
     min_sample_threshold: int,
 ) -> bytes
 ```
@@ -162,17 +157,17 @@ Domains and fields:
 | Kind | Domain, including final NUL | Ordered fields |
 | --- | --- | --- |
 | Rate bucket | `ratelimitly.resource.v1\0` | `window_size_ms`, `rate_limit` |
-| Latency tracker | `ratelimitly.latency-tracker.v1\0` | `ttl_ms`, `max_samples`, `buffer_size`, `min_sample_threshold` |
+| Latency tracker | `ratelimitly.latency-tracker.v1\0` | `ttl_ms`, `max_samples`, `min_sample_threshold` |
 
 The final NUL is part of the contract because the C implementation hashes `sizeof(domain_array)`. BLAKE2s-256 is computed first and then truncated. `BLAKE2s(digest_size=16)` is a different function and is not conformant.
 
-Known-answer vectors copied from `rl-c-client` v0.6.0 (`a9cfc87`):
+Known-answer vectors copied from `rl-c-client` v0.6.0:
 
 | Input | ID, hexadecimal |
 | --- | --- |
 | bucket `checkout`, window `1000`, rate `100` | `f5cf3ad8b8406854b596ba3614f16eff` |
-| tracker `inventory-backend`, TTL `10000`, max `100`, buffer `32`, minimum `5` | `0320bf15b884bda367a17e5ffb650441` |
-| tracker bytes `binary\0tracker`, every field `UINT32_MAX` | `0696ca52a5bfc5e9c46ba90f3110b728` |
+| tracker `inventory-backend`, TTL `10000`, max `100`, minimum `5` | `04283c08fe9f735566898b6982eac6c7` |
+| tracker bytes `binary\0tracker`, every field `UINT32_MAX` | `d7f118ffa4eebc99fdfe8b221f37a1f2` |
 
 Every client language, server-side diagnostic tool, and configuration generator must reproduce these values.
 

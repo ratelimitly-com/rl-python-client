@@ -286,17 +286,13 @@ class RateLimitlyClient:
         if not exact_resources and not exact_guards:
             return RCLIENT_OK, RateLimitResult(True, 0, False, (), ())
         try:
-            oversized_guard = any(
-                guard.buffer_size > self.auth_info.latency_buffer_size_max
-                for guard in exact_guards
-            )
             oversized_window = any(
                 resource.window_size_ms > self.auth_info.rate_window_size_ms_max
                 for resource in exact_resources
             )
         except (AttributeError, TypeError):
             return RCLIENT_ERR_PROTOCOL, None
-        if oversized_guard or oversized_window:
+        if oversized_window:
             return RCLIENT_ERR_PROTOCOL, None
 
         try:
@@ -416,17 +412,7 @@ class RateLimitlyClient:
         if self._closed or not reports:
             return RCLIENT_ERR_CONFIG
         try:
-            kept = tuple(
-                report
-                for report in reports
-                if report.buffer_size <= self.auth_info.latency_buffer_size_max
-            )
-        except (AttributeError, TypeError):
-            return RCLIENT_ERR_PROTOCOL
-        if not kept:
-            return RCLIENT_OK
-        try:
-            body = build_latency_report_body(kept)
+            body = build_latency_report_body(reports)
             pdu = build_pdu(R_PDU_LATENCY_REPORT, body)
             request_id = _request_id()
             packet = build_authenticated_packet(

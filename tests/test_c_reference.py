@@ -32,7 +32,6 @@ class CGuard(ctypes.Structure):
         ("threshold_ms", ctypes.c_uint32),
         ("ttl_ms", ctypes.c_uint32),
         ("max_samples", ctypes.c_uint32),
-        ("buffer_size", ctypes.c_uint32),
         ("min_sample_threshold", ctypes.c_uint32),
     ]
 
@@ -43,7 +42,6 @@ class CReport(ctypes.Structure):
         ("observed_latency", ctypes.c_uint32),
         ("ttl_ms", ctypes.c_uint32),
         ("max_samples", ctypes.c_uint32),
-        ("buffer_size", ctypes.c_uint32),
         ("min_sample_threshold", ctypes.c_uint32),
     ]
 
@@ -66,7 +64,6 @@ class TestCReference(unittest.TestCase):
         cls.library.r_client_derive_latency_tracker_id.argtypes = [
             ctypes.c_void_p,
             ctypes.c_size_t,
-            ctypes.c_uint32,
             ctypes.c_uint32,
             ctypes.c_uint32,
             ctypes.c_uint32,
@@ -110,7 +107,7 @@ class TestCReference(unittest.TestCase):
                 r_client_derive_bucket_id(name, window_size_ms, rate_limit),
             )
 
-            fields = [generator.randrange(0, 2**32) for _ in range(4)]
+            fields = [generator.randrange(0, 2**32) for _ in range(3)]
             self.assertEqual(
                 self.library.r_client_derive_latency_tracker_id(
                     storage, len(name), *fields, output
@@ -150,7 +147,7 @@ class TestCReference(unittest.TestCase):
             for _ in range(generator.randrange(0, 4)):
                 tracker_id = random_bytes(generator, 16)
                 threshold = generator.randrange(0, 2**32)
-                fields = [generator.randrange(0, 2**32) for _ in range(4)]
+                fields = [generator.randrange(0, 2**32) for _ in range(3)]
                 guards.append(LatencyGuard(tracker_id, threshold, *fields))
                 c_value = CGuard()
                 c_value.latency_tracker_id[:] = tracker_id
@@ -158,7 +155,6 @@ class TestCReference(unittest.TestCase):
                 (
                     c_value.ttl_ms,
                     c_value.max_samples,
-                    c_value.buffer_size,
                     c_value.min_sample_threshold,
                 ) = fields
                 c_guards.append(c_value)
@@ -194,7 +190,7 @@ class TestCReference(unittest.TestCase):
             for _ in range(generator.randrange(1, 5)):
                 tracker_id = random_bytes(generator, 16)
                 observed = generator.randrange(0, 2**32)
-                fields = [generator.randrange(0, 2**32) for _ in range(4)]
+                fields = [generator.randrange(0, 2**32) for _ in range(3)]
                 reports.append(ServiceLatencyReport(tracker_id, observed, *fields))
                 c_value = CReport()
                 c_value.latency_tracker_id[:] = tracker_id
@@ -202,7 +198,6 @@ class TestCReference(unittest.TestCase):
                 (
                     c_value.ttl_ms,
                     c_value.max_samples,
-                    c_value.buffer_size,
                     c_value.min_sample_threshold,
                 ) = fields
                 c_reports.append(c_value)
