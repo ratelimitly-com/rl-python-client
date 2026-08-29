@@ -125,7 +125,7 @@ def r_client_derive_latency_tracker_id(
 ) -> bytes:
     """Derive the canonical C-compatible 16-byte latency-tracker ID."""
     return _derive_content_id(
-        b"ratelimitly.latency-tracker.v1",
+        b"ratelimitly.latency-tracker.v2",
         latency_tracker_name,
         (ttl_ms, max_samples, min_sample_threshold),
     )

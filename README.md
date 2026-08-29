@@ -116,7 +116,11 @@ with RateLimitlyClient("rl-aes1...") as client:
 
 Bucket IDs include the exact bucket-name bytes, `window_size_ms`, and `rate_limit`. Latency-tracker IDs include the exact tracker-name bytes, `ttl_ms`, `max_samples`, and `min_sample_threshold`; a guard threshold is deliberately not part of the tracker ID.
 
-The Python helpers implement the same domain-separated binary preimage, little-endian integer encoding, BLAKE2s-256 digest, and 16-byte truncation as `rl-c-client` v0.6.0. Do not replace them with hashing of formatted text, and do not use `hashlib.blake2s(..., digest_size=16)`: digest length is a BLAKE2 parameter, so that produces a different ID.
+The Python helpers implement the same domain-separated binary preimage,
+little-endian integer encoding, BLAKE2s-256 digest, and 16-byte truncation as
+the coordinated wire-v2 C client. Do not replace them with hashing of formatted
+text, and do not use `hashlib.blake2s(..., digest_size=16)`: digest length is a
+BLAKE2 parameter, so that produces a different ID.
 
 See [API reference](docs/api.md#canonical-content-defined-identifiers) for the exact formula and cross-client known-answer vectors.
 

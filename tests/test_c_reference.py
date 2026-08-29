@@ -1,4 +1,4 @@
-"""Optional differential gate against a built rl-c-client v0.6.0 library."""
+"""Differential gate against the pinned wire-v2 rl-c-client reference."""
 
 import ctypes
 import os

@@ -1,4 +1,4 @@
-"""Known-answer and layout tests against rl-c-client v0.6.0."""
+"""Known-answer and layout tests for the coordinated wire-v2 contract."""
 
 import os
 import sys
@@ -38,7 +38,12 @@ class TestCanonicalIdentifiers(unittest.TestCase):
             r_client_derive_latency_tracker_id(
                 "inventory-backend", 10000, 100, 5
             ).hex(),
-            "04283c08fe9f735566898b6982eac6c7",
+            "6a17d07a424568304e50d28540f76e67",
+        )
+
+        self.assertEqual(
+            r_client_derive_latency_tracker_id("café", 60000, 200, 3).hex(),
+            "0f04bcd0fa9d655ca40dd204f50196f7",
         )
 
     def test_exact_binary_tracker_name_from_c_client(self):
@@ -49,7 +54,12 @@ class TestCanonicalIdentifiers(unittest.TestCase):
                 0xFFFFFFFF,
                 0xFFFFFFFF,
             ).hex(),
-            "d7f118ffa4eebc99fdfe8b221f37a1f2",
+            "2944d00ab0f1829a4d598d47f32fb0fa",
+        )
+
+        self.assertEqual(
+            r_client_derive_latency_tracker_id("a", 1, 1, 1).hex(),
+            "86b64d987043e6695b477b44b0cf5bdb",
         )
 
 

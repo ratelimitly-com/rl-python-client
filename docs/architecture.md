@@ -1,6 +1,8 @@
 # Architecture, wire format, and conformance
 
-The Python client independently implements the same public protocol contract as `rl-c-client` v0.6.0. It does not wrap or load the C library at runtime.
+The Python client independently implements the same wire-v2 public protocol
+contract as the coordinated C client. It does not wrap or load the C library at
+runtime.
 
 ## State ownership
 
@@ -88,7 +90,8 @@ The repository locks this contract with:
 - the C client’s three published known-answer vectors, including an embedded-NUL name;
 - exact request-body, latency-body, PDU, cookie, and AES envelope tests;
 - local UDP tests for request selection and replay behavior; and
-- direct development-time differential checks against the `rl-c-client` v0.6.0 shared library.
+- direct development-time differential checks against a pinned wire-v2
+  `rl-c-client` commit.
 
 During this conformance work, 200 randomized bucket inputs and 200 randomized latency-tracker inputs matched the C helper byte-for-byte. A further 100 randomized rate-request bodies and 100 randomized latency-report bodies matched the C builders byte-for-byte.
 

@@ -157,17 +157,17 @@ Domains and fields:
 | Kind | Domain, including final NUL | Ordered fields |
 | --- | --- | --- |
 | Rate bucket | `ratelimitly.resource.v1\0` | `window_size_ms`, `rate_limit` |
-| Latency tracker | `ratelimitly.latency-tracker.v1\0` | `ttl_ms`, `max_samples`, `min_sample_threshold` |
+| Latency tracker | `ratelimitly.latency-tracker.v2\0` | `ttl_ms`, `max_samples`, `min_sample_threshold` |
 
 The final NUL is part of the contract because the C implementation hashes `sizeof(domain_array)`. BLAKE2s-256 is computed first and then truncated. `BLAKE2s(digest_size=16)` is a different function and is not conformant.
 
-Known-answer vectors copied from `rl-c-client` v0.6.0:
+Known-answer vectors shared with the wire-v2 `rl-c-client` contract:
 
 | Input | ID, hexadecimal |
 | --- | --- |
 | bucket `checkout`, window `1000`, rate `100` | `f5cf3ad8b8406854b596ba3614f16eff` |
-| tracker `inventory-backend`, TTL `10000`, max `100`, minimum `5` | `04283c08fe9f735566898b6982eac6c7` |
-| tracker bytes `binary\0tracker`, every field `UINT32_MAX` | `d7f118ffa4eebc99fdfe8b221f37a1f2` |
+| tracker `inventory-backend`, TTL `10000`, max `100`, minimum `5` | `6a17d07a424568304e50d28540f76e67` |
+| tracker bytes `binary\0tracker`, every field `UINT32_MAX` | `2944d00ab0f1829a4d598d47f32fb0fa` |
 
 Every client language, server-side diagnostic tool, and configuration generator must reproduce these values.
 
