@@ -1,0 +1,177 @@
+name: publish-pypi
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing GitHub release version to publish, without the v prefix
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-pypi-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish verified GitHub release to PyPI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Require the default branch and a numeric version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "PyPI publishing must be dispatched from main" >&2
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be numeric MAJOR.MINOR.PATCH without a v prefix" >&2
+            exit 1
+          fi
+
+      - name: Check out the released tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/v${{ inputs.version }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Download the exact GitHub release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          release_state="$(
+            gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,isPrerelease \
+              --jq 'if .isDraft then "draft" elif .isPrerelease then "prerelease" else "published" end'
+          )"
+          if [[ "$release_state" != published ]]; then
+            echo "$tag is not a published, non-prerelease GitHub release" >&2
+            exit 1
+          fi
+          mkdir dist
+          gh release download "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir dist
+
+      - name: Verify the complete distribution set and metadata
+        shell: python
+        run: |
+          import email.parser
+          import hashlib
+          import os
+          import pathlib
+          import re
+          import tarfile
+          import tomllib
+          import zipfile
+
+          version = os.environ["VERSION"]
+          if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+              raise SystemExit("invalid VERSION")
+
+          root = pathlib.Path(os.environ.get("DIST_PATH", "dist"))
+          wheel_name = f"ratelimitly-{version}-py3-none-any.whl"
+          sdist_name = f"ratelimitly-{version}.tar.gz"
+          expected = {"SHA256SUMS", wheel_name, sdist_name}
+          found = {path.name for path in root.iterdir() if path.is_file()}
+          if found != expected:
+              raise SystemExit(
+                  f"unexpected GitHub release assets: expected {sorted(expected)},"
+                  f" found {sorted(found)}"
+              )
+
+          checksums = {}
+          for line in (root / "SHA256SUMS").read_text(encoding="ascii").splitlines():
+              match = re.fullmatch(r"([0-9a-f]{64})  ([^/]+)", line)
+              if match is None:
+                  raise SystemExit(f"invalid SHA256SUMS line: {line!r}")
+              digest, name = match.groups()
+              if name in checksums:
+                  raise SystemExit(f"duplicate checksum for {name}")
+              checksums[name] = digest
+          if set(checksums) != {wheel_name, sdist_name}:
+              raise SystemExit(f"unexpected checksum set: {sorted(checksums)}")
+          for name, expected_digest in checksums.items():
+              actual = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              if actual != expected_digest:
+                  raise SystemExit(
+                      f"{name} has SHA-256 {actual}, expected {expected_digest}"
+                  )
+
+          project = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+          )["project"]
+          if project["name"] != "ratelimitly" or project["version"] != version:
+              raise SystemExit(
+                  "the released tag's pyproject.toml does not match ratelimitly "
+                  + version
+              )
+
+          parser = email.parser.Parser()
+
+          with zipfile.ZipFile(root / wheel_name) as archive:
+              metadata_names = [
+                  name
+                  for name in archive.namelist()
+                  if name.endswith(".dist-info/METADATA")
+              ]
+              if len(metadata_names) != 1:
+                  raise SystemExit(
+                      f"wheel contains {len(metadata_names)} METADATA files"
+                  )
+              wheel_metadata = parser.parsestr(
+                  archive.read(metadata_names[0]).decode("utf-8")
+              )
+
+          with tarfile.open(root / sdist_name, "r:gz") as archive:
+              pkg_info = [
+                  member
+                  for member in archive.getmembers()
+                  if member.isfile() and member.name.count("/") == 1
+                  and member.name.endswith("/PKG-INFO")
+              ]
+              if len(pkg_info) != 1:
+                  raise SystemExit(f"sdist contains {len(pkg_info)} root PKG-INFO files")
+              handle = archive.extractfile(pkg_info[0])
+              if handle is None:
+                  raise SystemExit("cannot read sdist PKG-INFO")
+              sdist_metadata = parser.parsestr(handle.read().decode("utf-8"))
+
+          for kind, metadata in (
+              ("wheel", wheel_metadata),
+              ("sdist", sdist_metadata),
+          ):
+              if metadata["Name"] != "ratelimitly":
+                  raise SystemExit(f"{kind} project name is {metadata['Name']!r}")
+              if metadata["Version"] != version:
+                  raise SystemExit(f"{kind} version is {metadata['Version']!r}")
+
+          print(f"verified ratelimitly {version} wheel and sdist")
+          for name in sorted(checksums):
+              print(f"{checksums[name]}  {name}")
+
+      - name: Publish distributions with Trusted Publishing
+        id: publish
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: false
