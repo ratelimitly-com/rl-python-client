@@ -1,4 +1,4 @@
-"""Known-answer and layout tests against rl-c-client v0.6.0."""
+"""Known-answer and layout tests for the coordinated wire-v2 contract."""
 
 import os
 import sys
@@ -36,9 +36,14 @@ class TestCanonicalIdentifiers(unittest.TestCase):
     def test_tracker_known_answer_from_c_client(self):
         self.assertEqual(
             r_client_derive_latency_tracker_id(
-                "inventory-backend", 10000, 100, 32, 5
+                "inventory-backend", 10000, 100, 5
             ).hex(),
-            "0320bf15b884bda367a17e5ffb650441",
+            "6a17d07a424568304e50d28540f76e67",
+        )
+
+        self.assertEqual(
+            r_client_derive_latency_tracker_id("café", 60000, 200, 3).hex(),
+            "0f04bcd0fa9d655ca40dd204f50196f7",
         )
 
     def test_exact_binary_tracker_name_from_c_client(self):
@@ -48,29 +53,33 @@ class TestCanonicalIdentifiers(unittest.TestCase):
                 0xFFFFFFFF,
                 0xFFFFFFFF,
                 0xFFFFFFFF,
-                0xFFFFFFFF,
             ).hex(),
-            "0696ca52a5bfc5e9c46ba90f3110b728",
+            "2944d00ab0f1829a4d598d47f32fb0fa",
+        )
+
+        self.assertEqual(
+            r_client_derive_latency_tracker_id("a", 1, 1, 1).hex(),
+            "86b64d987043e6695b477b44b0cf5bdb",
         )
 
 
 class TestWireProtocol(unittest.TestCase):
     def test_rate_request_body_exact_layout(self):
-        guard = LatencyGuard(b"\x01" * 16, 50, 1000, 10, 32, 2)
+        guard = LatencyGuard(b"\x01" * 16, 50, 1000, 10, 2)
         resource = ResourceRequest(b"\x02" * 16, 60000, 100, 3)
         body = build_rate_request_body([resource], [guard], "api")
         self.assertEqual(
             body.hex(),
             "01000100"
             + "01" * 16
-            + "e80300000a00000020000000020000003200000000000000"
+            + "e80300000a000000020000003200000000000000"
             + "02" * 16
             + "60ea00006400000003000000"
             + "4d4c0c000300617069000000",
         )
 
     def test_guard_only_and_empty_rate_bodies_are_valid(self):
-        guard = LatencyGuard(b"g" * 16, 50, 1000, 10, 32, 2)
+        guard = LatencyGuard(b"g" * 16, 50, 1000, 10, 2)
         self.assertEqual(build_rate_request_body([], []).hex(), "00000000")
         self.assertEqual(build_rate_request_body([], [guard])[:4].hex(), "01000000")
 
@@ -79,17 +88,17 @@ class TestWireProtocol(unittest.TestCase):
         self.assertEqual(pdu.hex(), "52540c003c00000000000000")
 
     def test_latency_report_body_and_pdu_match_c_layout(self):
-        report = ServiceLatencyReport(b"svc" + b"\x00" * 13, 25, 1000, 10, 64, 1)
+        report = ServiceLatencyReport(b"svc" + b"\x00" * 13, 25, 1000, 10, 1)
         body = build_latency_report_body([report])
         self.assertEqual(
             body.hex(),
             "01000000"
             "73766300000000000000000000000000"
-            "e80300000a000000400000000100000019000000",
+            "e80300000a0000000100000019000000",
         )
         pdu = build_pdu(R_PDU_LATENCY_REPORT, body)
-        self.assertEqual(len(pdu), 48)
-        self.assertEqual(pdu[:8].hex(), "4c52300000000000")
+        self.assertEqual(len(pdu), 44)
+        self.assertEqual(pdu[:8].hex(), "4c522c0000000000")
 
     def test_cookie_packet_and_response_parser(self):
         auth = parse_auth_key(COOKIE_KEY)
@@ -99,7 +108,6 @@ class TestWireProtocol(unittest.TestCase):
             + b"g" * 16
             + (1000).to_bytes(4, "little")
             + (10).to_bytes(4, "little")
-            + (32).to_bytes(4, "little")
             + (2).to_bytes(4, "little")
             + (50).to_bytes(4, "little")
             + (25).to_bytes(4, "little")

@@ -116,7 +116,7 @@ jobs:
           -v
 
   c-reference:
-    name: rl-c-client v0.6.0 differential conformance
+    name: Pinned wire-v2 C differential conformance
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -131,7 +131,7 @@ jobs:
         with:
           persist-credentials: false
           repository: ratelimitly-com/rl-c-client
-          ref: a9cfc87e7eb90a99d77028b18d1079b301cf619c
+          ref: 953d29049076307a05e26c20b5ebef49e6cf80de
           path: _reference/rl-c-client
 
       - name: Set up Python

@@ -68,10 +68,7 @@ RATE_WINDOW_SIZE_MS = 60000
 LATENCY_BUCKET_RATE_LIMIT = 1000
 LATENCY_THRESHOLD_MS = 1000
 LATENCY_TTL_MS = 10000
-# One slot makes the reported sample the tracker's only sample, and a minimum
-# threshold of one activates the tracker as soon as that sample lands.
 LATENCY_MAX_SAMPLES = 1
-LATENCY_BUFFER_SIZE = 1
 LATENCY_MIN_SAMPLE_THRESHOLD = 1
 REPORTED_LATENCY_MS = 37
 LATENCY_POLL_ATTEMPTS = 20
@@ -215,7 +212,6 @@ def prove_latency_tracker(client: RateLimitlyClient, test_namespace: str) -> int
         scoped_name(test_namespace, "latency-service"),
         LATENCY_TTL_MS,
         LATENCY_MAX_SAMPLES,
-        LATENCY_BUFFER_SIZE,
         LATENCY_MIN_SAMPLE_THRESHOLD,
     )
     resource = ResourceRequest(
@@ -226,7 +222,6 @@ def prove_latency_tracker(client: RateLimitlyClient, test_namespace: str) -> int
         LATENCY_THRESHOLD_MS,
         LATENCY_TTL_MS,
         LATENCY_MAX_SAMPLES,
-        LATENCY_BUFFER_SIZE,
         LATENCY_MIN_SAMPLE_THRESHOLD,
     )
 
@@ -254,7 +249,6 @@ def prove_latency_tracker(client: RateLimitlyClient, test_namespace: str) -> int
         REPORTED_LATENCY_MS,
         LATENCY_TTL_MS,
         LATENCY_MAX_SAMPLES,
-        LATENCY_BUFFER_SIZE,
         LATENCY_MIN_SAMPLE_THRESHOLD,
     )
     status = client.report_latency((report,))

@@ -67,14 +67,12 @@ from ratelimitly import (
 
 ttl_ms = 10_000
 max_samples = 100
-buffer_size = 32
 min_sample_threshold = 5
 
 tracker_id = r_client_derive_latency_tracker_id(
     "inventory-backend",    # Exact application-defined tracker name.
     ttl_ms,                  # Maximum sample lifetime.
     max_samples,             # Samples considered by the tracker.
-    buffer_size,             # Requested tracker storage.
     min_sample_threshold,    # Warm-up samples before guards take effect.
 )
 
@@ -83,7 +81,6 @@ report = ServiceLatencyReport(
     observed_latency_ms=25,
     ttl_ms=ttl_ms,
     max_samples=max_samples,
-    buffer_size=buffer_size,
     min_sample_threshold=min_sample_threshold,
 )
 
@@ -105,7 +102,6 @@ guard = LatencyGuard(
     threshold_ms=50,                     # Admission requires current latency < 50 ms.
     ttl_ms=ttl_ms,
     max_samples=max_samples,
-    buffer_size=buffer_size,
     min_sample_threshold=min_sample_threshold,
 )
 
@@ -118,9 +114,13 @@ with RateLimitlyClient("rl-aes1...") as client:
 
 ## Canonical IDs must agree across clients
 
-Bucket IDs include the exact bucket-name bytes, `window_size_ms`, and `rate_limit`. Latency-tracker IDs include the exact tracker-name bytes, `ttl_ms`, `max_samples`, `buffer_size`, and `min_sample_threshold`; a guard threshold is deliberately not part of the tracker ID.
+Bucket IDs include the exact bucket-name bytes, `window_size_ms`, and `rate_limit`. Latency-tracker IDs include the exact tracker-name bytes, `ttl_ms`, `max_samples`, and `min_sample_threshold`; a guard threshold is deliberately not part of the tracker ID.
 
-The Python helpers implement the same domain-separated binary preimage, little-endian integer encoding, BLAKE2s-256 digest, and 16-byte truncation as `rl-c-client` v0.6.0. Do not replace them with hashing of formatted text, and do not use `hashlib.blake2s(..., digest_size=16)`: digest length is a BLAKE2 parameter, so that produces a different ID.
+The Python helpers implement the same domain-separated binary preimage,
+little-endian integer encoding, BLAKE2s-256 digest, and 16-byte truncation as
+the coordinated wire-v2 C client. Do not replace them with hashing of formatted
+text, and do not use `hashlib.blake2s(..., digest_size=16)`: digest length is a
+BLAKE2 parameter, so that produces a different ID.
 
 See [API reference](docs/api.md#canonical-content-defined-identifiers) for the exact formula and cross-client known-answer vectors.
 

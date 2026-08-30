@@ -32,7 +32,6 @@ class LatencyGuard:
     threshold_ms: int
     ttl_ms: int
     max_samples: int
-    buffer_size: int
     min_sample_threshold: int
 
 
@@ -44,7 +43,6 @@ class ServiceLatencyReport:
     observed_latency_ms: int
     ttl_ms: int
     max_samples: int
-    buffer_size: int
     min_sample_threshold: int
 
 

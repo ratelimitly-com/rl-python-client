@@ -20,9 +20,9 @@ from .types import (
 R_TENANT_TLV_LEN = 40
 R_PDU_HEADER_LEN = 8
 R_MAX_PACKET_SIZE = 1200
-R_GUARD_BLOCK_WIRE_LEN = 40
+R_GUARD_BLOCK_WIRE_LEN = 36
 R_RESOURCE_BLOCK_WIRE_LEN = 28
-R_SERVICE_LATENCY_BLOCK_WIRE_LEN = 36
+R_SERVICE_LATENCY_BLOCK_WIRE_LEN = 32
 
 R_TLV_TENANT = 0x4C52
 R_TLV_AUTH_COOKIE = 0x4143
@@ -121,14 +121,13 @@ def r_client_derive_latency_tracker_id(
     latency_tracker_name: IdentifierName,
     ttl_ms: int,
     max_samples: int,
-    buffer_size: int,
     min_sample_threshold: int,
 ) -> bytes:
     """Derive the canonical C-compatible 16-byte latency-tracker ID."""
     return _derive_content_id(
-        b"ratelimitly.latency-tracker.v1",
+        b"ratelimitly.latency-tracker.v2",
         latency_tracker_name,
-        (ttl_ms, max_samples, buffer_size, min_sample_threshold),
+        (ttl_ms, max_samples, min_sample_threshold),
     )
 
 
@@ -160,11 +159,10 @@ def build_rate_request_body(
     for index, guard in enumerate(guards):
         body.extend(
             struct.pack(
-                "<16sIIIIII",
+                "<16sIIIII",
                 _id16(guard.latency_tracker_id, f"guards[{index}].latency_tracker_id"),
                 _uint32(guard.ttl_ms, f"guards[{index}].ttl_ms"),
                 _uint32(guard.max_samples, f"guards[{index}].max_samples"),
-                _uint32(guard.buffer_size, f"guards[{index}].buffer_size"),
                 _uint32(guard.min_sample_threshold, f"guards[{index}].min_sample_threshold"),
                 _uint32(guard.threshold_ms, f"guards[{index}].threshold_ms"),
                 0,
@@ -200,11 +198,10 @@ def build_latency_report_body(reports: Sequence[ServiceLatencyReport]) -> bytes:
     for index, report in enumerate(reports):
         body.extend(
             struct.pack(
-                "<16sIIIII",
+                "<16sIIII",
                 _id16(report.latency_tracker_id, f"reports[{index}].latency_tracker_id"),
                 _uint32(report.ttl_ms, f"reports[{index}].ttl_ms"),
                 _uint32(report.max_samples, f"reports[{index}].max_samples"),
-                _uint32(report.buffer_size, f"reports[{index}].buffer_size"),
                 _uint32(report.min_sample_threshold, f"reports[{index}].min_sample_threshold"),
                 _uint32(report.observed_latency_ms, f"reports[{index}].observed_latency_ms"),
             )
@@ -374,11 +371,10 @@ def parse_rate_response_packet(packet: bytes, auth: AuthKeyInfo) -> Tuple[bytes,
             tracker_id,
             _ttl,
             _max_samples,
-            _buffer_size,
             _minimum,
             threshold,
             current,
-        ) = struct.unpack_from("<16sIIIIII", body, offset)
+        ) = struct.unpack_from("<16sIIIII", body, offset)
         passed = current < threshold
         guards.append(GuardResult(tracker_id, threshold, current, passed))
         success = success and passed
