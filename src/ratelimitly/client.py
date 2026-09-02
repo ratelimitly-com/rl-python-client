@@ -58,6 +58,7 @@ def _request_id() -> bytes:
     return bytes(value)
 
 
+
 class RateLimitlyClient:
     """Serialized blocking client implementing rl-c-client's request policy."""
 
@@ -86,6 +87,7 @@ class RateLimitlyClient:
         self._dns_refresh_ttl_ms = 0
         self._endpoints: List[ServerEndpoint] = []
         self._sockets: Dict[int, socket.socket] = {}
+        self._send_failures: Dict[int, int] = {}
         self._next_steering_ports: Dict[int, int] = {}
         self._closed = False
 
@@ -111,6 +113,24 @@ class RateLimitlyClient:
         positive_ttls = [endpoint.ttl_ms for endpoint in endpoints if endpoint.ttl_ms > 0]
         self._dns_refresh_ttl_ms = min(positive_ttls) if positive_ttls else 0
         return RCLIENT_OK, list(self._endpoints)
+
+    def _record_send_failures(self, server_ids: Sequence[int]) -> None:
+        """Count endpoints a send could not reach.
+
+        Partial delivery is otherwise invisible: the call reports RCLIENT_OK
+        through the endpoints that worked, while the HA path selects the oldest
+        replica's answer, so losing the oldest replica silently downgrades the
+        result. This is a counter rather than a log record because it sits on
+        the per-request send path, where a persistently unreachable endpoint
+        would otherwise emit one record per request for as long as it stays
+        down.
+        """
+        for server_id in server_ids:
+            self._send_failures[server_id] = self._send_failures.get(server_id, 0) + 1
+
+    def send_failures(self) -> Dict[int, int]:
+        """Endpoints that could not be sent to, counted by server id."""
+        return dict(self._send_failures)
 
     def _socket_for_family(self, family: int) -> socket.socket:
         current = self._sockets.get(family)
@@ -192,14 +212,28 @@ class RateLimitlyClient:
             return RCLIENT_ERR_PROTOCOL
         except Exception:
             return RCLIENT_ERR_AUTH
+        # One unreachable endpoint must not discard the endpoints behind it: a
+        # dual-stack SRV target expands to one endpoint per address sharing a
+        # server id, so an IPv6 address on an IPv4-only host would otherwise
+        # fail every request. Report an error only if nothing got out at all.
+        attempted = 0
+        delivered = 0
+        failed_server_ids = []
         for target in endpoints:
             if missing_only and self._target_responded(target, seen_server_ids, seen_addresses):
                 continue
+            attempted += 1
             try:
                 self._socket_for_family(target.family).sendto(packet, target.address)
             except OSError:
-                if not best_effort:
-                    return RCLIENT_ERR_IO
+                if target.server_id is not None:
+                    failed_server_ids.append(target.server_id)
+                continue
+            delivered += 1
+        if not best_effort and attempted > 0 and delivered == 0:
+            return RCLIENT_ERR_IO
+        if not best_effort and 0 < delivered < attempted:
+            self._record_send_failures(failed_server_ids)
         return RCLIENT_OK
 
     def _receive_until(
@@ -429,11 +463,20 @@ class RateLimitlyClient:
         status, endpoints = self._ensure_endpoints()
         if status != RCLIENT_OK:
             return status
+        delivered = 0
+        failed_server_ids = []
         for target in endpoints:
             try:
                 self._socket_for_family(target.family).sendto(packet, target.address)
             except OSError:
-                return RCLIENT_ERR_IO
+                if target.server_id is not None:
+                    failed_server_ids.append(target.server_id)
+                continue
+            delivered += 1
+        if endpoints and delivered == 0:
+            return RCLIENT_ERR_IO
+        if 0 < delivered < len(endpoints):
+            self._record_send_failures(failed_server_ids)
         return RCLIENT_OK
 
     def close(self) -> None:
