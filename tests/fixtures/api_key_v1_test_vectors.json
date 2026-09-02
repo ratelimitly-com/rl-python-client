@@ -40,7 +40,7 @@
       "auth_method": "aes",
       "key_id": "2",
       "secret_hex": "0202020202020202020202020202020202020202020202020202020202020202",
-      "quota_word_hex_le": "2f2df2f8",
+      "quota_word_hex_le": "2f2df2b0",
       "quotas": {
         "rate_buckets_max": 32768,
         "latency_services_max": 512,
@@ -57,7 +57,7 @@
       "auth_method": "cookie",
       "key_id": "3",
       "secret_hex": "0303030303030303030303030303030303030303030303030303030303030303",
-      "quota_word_hex_le": "50b1f2f8",
+      "quota_word_hex_le": "50b1f2d8",
       "quotas": {
         "rate_buckets_max": 65536,
         "latency_services_max": 1024,
@@ -74,7 +74,7 @@
       "auth_method": "aes",
       "key_id": "4",
       "secret_hex": "0404040404040404040404040404040404040404040404040404040404040404",
-      "quota_word_hex_le": "9239f3f8",
+      "quota_word_hex_le": "9239f3e8",
       "quotas": {
         "rate_buckets_max": 262144,
         "latency_services_max": 4096,
