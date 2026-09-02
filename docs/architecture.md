@@ -1,6 +1,8 @@
 # Architecture, wire format, and conformance
 
-The Python client independently implements the same public protocol contract as `rl-c-client` v0.6.0. It does not wrap or load the C library at runtime.
+The Python client independently implements the same wire-v2 public protocol
+contract as the coordinated C client. It does not wrap or load the C library at
+runtime.
 
 ## State ownership
 
@@ -52,10 +54,10 @@ AES authentication uses a 32-byte TLV: four-byte header, 12-byte nonce, and 16-b
 
 The PDU header is eight bytes: type `0x5452`, total PDU size, and `dedup_ttl_ms`. The body starts with `uint16 guard_count` and `uint16 resource_count`, followed by guard blocks, resource blocks, and an optional metrics-label TLV.
 
-Guard blocks are 40 bytes:
+Guard blocks are 36 bytes:
 
 ```text
-tracker_id[16], ttl_ms:u32, max_samples:u32, buffer_size:u32,
+tracker_id[16], ttl_ms:u32, max_samples:u32,
 min_sample_threshold:u32, threshold_ms:u32, current_latency:u32=0
 ```
 
@@ -70,10 +72,10 @@ The response reuses those block sizes. A guard passes when `current_latency < th
 
 ## Latency-report PDU
 
-The PDU type is `0x524c`. Its body starts with `uint16 report_count` and two reserved zero bytes. Each report is 36 bytes:
+The PDU type is `0x524c`. Its body starts with `uint16 report_count` and two reserved zero bytes. Each report is 32 bytes:
 
 ```text
-tracker_id[16], ttl_ms:u32, max_samples:u32, buffer_size:u32,
+tracker_id[16], ttl_ms:u32, max_samples:u32,
 min_sample_threshold:u32, observed_latency_ms:u32
 ```
 
@@ -88,7 +90,8 @@ The repository locks this contract with:
 - the C client’s three published known-answer vectors, including an embedded-NUL name;
 - exact request-body, latency-body, PDU, cookie, and AES envelope tests;
 - local UDP tests for request selection and replay behavior; and
-- direct development-time differential checks against the `rl-c-client` v0.6.0 shared library.
+- direct development-time differential checks against a pinned wire-v2
+  `rl-c-client` commit.
 
 During this conformance work, 200 randomized bucket inputs and 200 randomized latency-tracker inputs matched the C helper byte-for-byte. A further 100 randomized rate-request bodies and 100 randomized latency-report bodies matched the C builders byte-for-byte.
 

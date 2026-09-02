@@ -80,7 +80,6 @@ def response_packet(
         for value in (
             guard.ttl_ms,
             guard.max_samples,
-            guard.buffer_size,
             guard.min_sample_threshold,
             guard.threshold_ms,
             current_latency,
@@ -102,7 +101,16 @@ def response_packet(
     )
 
 
-def responder(current, server_id, build_response, *, drop_count=0, delay=0.0, received=None):
+def responder(
+    current,
+    server_id,
+    build_response,
+    *,
+    drop_count=0,
+    delay=0.0,
+    received=None,
+    source_addresses=None,
+):
     def run():
         try:
             for _ in range(drop_count):
@@ -112,6 +120,8 @@ def responder(current, server_id, build_response, *, drop_count=0, delay=0.0, re
             packet, address = current.recvfrom(2048)
             if received is not None:
                 received.append(packet)
+            if source_addresses is not None:
+                source_addresses.append(address)
             if delay:
                 time.sleep(delay)
             current.sendto(build_response(packet[12:28], server_id), address)
@@ -170,7 +180,7 @@ class TestClient(unittest.TestCase):
 
     def test_guard_only_request_is_sent_and_parsed(self):
         server, endpoint = udp_server(10)
-        guard = LatencyGuard(b"g" * 16, 50, 1000, 10, 32, 2)
+        guard = LatencyGuard(b"g" * 16, 50, 1000, 10, 2)
         received = []
         thread = responder(
             server,
@@ -361,9 +371,10 @@ class TestClient(unittest.TestCase):
         client.close()
         server.close()
 
-    def test_keep_port_false_releases_persistent_socket(self):
+    def test_keep_port_false_rebinds_persistent_socket(self):
         server, endpoint = udp_server(10)
         resource = ResourceRequest(b"b" * 16, 1000, 100, 1)
+        first_sources = []
         thread = responder(
             server,
             10,
@@ -373,6 +384,7 @@ class TestClient(unittest.TestCase):
                 resource=resource,
                 steering_feedback=False,
             ),
+            source_addresses=first_sources,
         )
         client = RateLimitlyClient(
             COOKIE_KEY,
@@ -382,8 +394,28 @@ class TestClient(unittest.TestCase):
         status, result = client.check_rate_limit([resource])
         self.assertEqual(status, RCLIENT_OK)
         self.assertFalse(result.steering_feedback)
-        self.assertEqual(client._sockets, {})
+        self.assertIn(socket.AF_INET, client._sockets)
+        replacement_port = client._sockets[socket.AF_INET].getsockname()[1]
+        self.assertNotEqual(replacement_port, first_sources[0][1])
+
+        second_sources = []
+        second_thread = responder(
+            server,
+            10,
+            lambda request_id, server_id: response_packet(
+                request_id,
+                server_id,
+                resource=resource,
+                steering_feedback=True,
+            ),
+            source_addresses=second_sources,
+        )
+        status, result = client.check_rate_limit([resource])
+        self.assertEqual(status, RCLIENT_OK)
+        self.assertTrue(result.steering_feedback)
+        self.assertEqual(second_sources[0][1], replacement_port)
         thread.join(1.0)
+        second_thread.join(1.0)
         client.close()
         server.close()
 
@@ -413,7 +445,7 @@ class TestClient(unittest.TestCase):
             policy=policy(),
             resolver=lambda _name: [endpoint],
         )
-        report = ServiceLatencyReport(b"s" * 16, 25, 1000, 10, 32, 2)
+        report = ServiceLatencyReport(b"s" * 16, 25, 1000, 10, 2)
         self.assertEqual(client.report_latency([report]), RCLIENT_OK)
         packet, _address = server.recvfrom(2048)
         pdu = packet[76:]
@@ -421,20 +453,6 @@ class TestClient(unittest.TestCase):
         self.assertEqual(client.report_latency([]), RCLIENT_ERR_CONFIG)
         client.close()
         server.close()
-
-    def test_oversized_guard_is_rejected_before_dns(self):
-        calls = []
-        client = RateLimitlyClient(
-            COOKIE_KEY,
-            policy=policy(),
-            resolver=lambda name: calls.append(name) or [],
-        )
-        guard = LatencyGuard(b"g" * 16, 50, 1000, 10, 65, 2)
-        status, result = client.check_rate_limit(guards=[guard])
-        self.assertEqual(status, RCLIENT_ERR_PROTOCOL)
-        self.assertIsNone(result)
-        self.assertEqual(calls, [])
-        client.close()
 
     def test_oversized_resource_window_is_rejected_before_dns(self):
         calls = []

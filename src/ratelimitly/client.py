@@ -20,6 +20,11 @@ from .protocol import (
     build_rate_request_pdu,
     parse_rate_response_packet,
 )
+from .steering import (
+    bind_next_steering_socket,
+    create_bound_udp_socket,
+    next_steering_port,
+)
 from .types import (
     LatencyGuard,
     RateLimitResult,
@@ -83,6 +88,7 @@ class RateLimitlyClient:
         self._endpoints: List[ServerEndpoint] = []
         self._sockets: Dict[int, socket.socket] = {}
         self._send_failures: Dict[int, int] = {}
+        self._next_steering_ports: Dict[int, int] = {}
         self._closed = False
 
     def _ensure_endpoints(self) -> Tuple[int, List[ServerEndpoint]]:
@@ -130,8 +136,7 @@ class RateLimitlyClient:
         current = self._sockets.get(family)
         if current is not None:
             return current
-        current = self._socket_factory(family, socket.SOCK_DGRAM)
-        current.setblocking(False)
+        current = create_bound_udp_socket(family, 0, self._socket_factory)
         self._sockets[family] = current
         return current
 
@@ -142,6 +147,38 @@ class RateLimitlyClient:
             except OSError:
                 pass
         self._sockets.clear()
+        self._next_steering_ports.clear()
+
+    def _apply_steering(self) -> bool:
+        replacements: Dict[int, socket.socket] = {}
+        following_ports: Dict[int, int] = {}
+        try:
+            for family, previous in self._sockets.items():
+                current_port = previous.getsockname()[1]
+                first_port = self._next_steering_ports.get(
+                    family, next_steering_port(current_port)
+                )
+                replacement, _selected, following = bind_next_steering_socket(
+                    family,
+                    first_port,
+                    self._socket_factory,
+                )
+                replacements[family] = replacement
+                following_ports[family] = following
+        except (OSError, ValueError):
+            for replacement in replacements.values():
+                replacement.close()
+            return False
+
+        previous_sockets = self._sockets
+        self._sockets = replacements
+        self._next_steering_ports.update(following_ports)
+        for previous in previous_sockets.values():
+            try:
+                previous.close()
+            except OSError:
+                pass
+        return True
 
     @staticmethod
     def _target_responded(
@@ -283,17 +320,13 @@ class RateLimitlyClient:
         if not exact_resources and not exact_guards:
             return RCLIENT_OK, RateLimitResult(True, 0, False, (), ())
         try:
-            oversized_guard = any(
-                guard.buffer_size > self.auth_info.latency_buffer_size_max
-                for guard in exact_guards
-            )
             oversized_window = any(
                 resource.window_size_ms > self.auth_info.rate_window_size_ms_max
                 for resource in exact_resources
             )
         except (AttributeError, TypeError):
             return RCLIENT_ERR_PROTOCOL, None
-        if oversized_guard or oversized_window:
+        if oversized_window:
             return RCLIENT_ERR_PROTOCOL, None
 
         try:
@@ -344,7 +377,7 @@ class RateLimitlyClient:
             )
             if status != RCLIENT_OK:
                 if rebind_requested:
-                    self._close_sockets()
+                    self._apply_steering()
                 return status, None
 
             best, selected, phase_rebind, phase_status = self._receive_until(
@@ -360,7 +393,7 @@ class RateLimitlyClient:
             rebind_requested = rebind_requested or phase_rebind
             if phase_status != RCLIENT_OK:
                 if rebind_requested:
-                    self._close_sockets()
+                    self._apply_steering()
                 return phase_status, None
             if selected and best is not None:
                 break
@@ -386,12 +419,12 @@ class RateLimitlyClient:
             rebind_requested = rebind_requested or phase_rebind
             if phase_status != RCLIENT_OK:
                 if rebind_requested:
-                    self._close_sockets()
+                    self._apply_steering()
                 return phase_status, None
 
         if best is None:
             if rebind_requested:
-                self._close_sockets()
+                self._apply_steering()
             return RCLIENT_ERR_TIMEOUT, None
 
         if self.policy.completion_delivery and self._clock_ms() < start_ms + horizon_ms:
@@ -405,7 +438,7 @@ class RateLimitlyClient:
                 best_effort=True,
             )
         if rebind_requested:
-            self._close_sockets()
+            self._apply_steering()
         return RCLIENT_OK, best
 
     def report_latency(self, reports: Sequence[ServiceLatencyReport]) -> int:
@@ -413,17 +446,7 @@ class RateLimitlyClient:
         if self._closed or not reports:
             return RCLIENT_ERR_CONFIG
         try:
-            kept = tuple(
-                report
-                for report in reports
-                if report.buffer_size <= self.auth_info.latency_buffer_size_max
-            )
-        except (AttributeError, TypeError):
-            return RCLIENT_ERR_PROTOCOL
-        if not kept:
-            return RCLIENT_OK
-        try:
-            body = build_latency_report_body(kept)
+            body = build_latency_report_body(reports)
             pdu = build_pdu(R_PDU_LATENCY_REPORT, body)
             request_id = _request_id()
             packet = build_authenticated_packet(

@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - '.github/workflows/ci.yml'
+      - '.github/workflows/publish-pypi.yml'
       - '.github/workflows/release.yml'
       - 'README.md'
+      - 'RELEASING.md'
       - 'pyproject.toml'
       - 'setup.py'
       - 'src/**'
