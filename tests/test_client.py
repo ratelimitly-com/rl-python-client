@@ -71,6 +71,7 @@ def response_packet(
     resource=None,
     deficit=0,
     steering_feedback=True,
+    auth=None,
 ):
     guards = [] if guard is None else [guard]
     resources = [] if resource is None else [resource]
@@ -93,7 +94,7 @@ def response_packet(
         body.extend(b"\x00\x00")
     return build_authenticated_packet(
         build_pdu(R_PDU_RATE_RESPONSE, body),
-        AUTH,
+        AUTH if auth is None else auth,
         request_id=request_id,
         timestamp_ms=1234,
         tenant_id=server_id,
@@ -483,6 +484,36 @@ class TestClient(unittest.TestCase):
         status, result = asyncio.run(run())
         self.assertEqual(status, RCLIENT_OK)
         self.assertTrue(result.success)
+
+    def test_replay_preserves_static_packet_and_timestamp(self):
+        aes_key = "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtruhcxwfed9"
+        aes_auth = parse_auth_key(aes_key)
+        server, endpoint = udp_server(10)
+        received = []
+        resource = ResourceRequest(b"b" * 16, 1000, 100, 1)
+        thread = responder(
+            server,
+            10,
+            lambda request_id, server_id: response_packet(
+                request_id, server_id, resource=resource, auth=aes_auth
+            ),
+            drop_count=1,
+            received=received,
+        )
+        client = RateLimitlyClient(
+            aes_key,
+            policy=policy(unit_ms=20, replay_count=1, final_receive_units=1),
+            resolver=lambda _name: [endpoint],
+        )
+        status, result = client.check_rate_limit([resource])
+        thread.join(1.0)
+        self.assertEqual(status, RCLIENT_OK)
+        self.assertTrue(result.success)
+        self.assertEqual(len(received), 2)
+        # Round 1 replay must be bit-for-bit identical to round 0 packet
+        self.assertEqual(received[0], received[1])
+        client.close()
+        server.close()
 
 
 if __name__ == "__main__":

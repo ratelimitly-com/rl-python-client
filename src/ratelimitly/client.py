@@ -193,25 +193,15 @@ class RateLimitlyClient:
     def _send_request(
         self,
         endpoints: Sequence[ServerEndpoint],
-        request_id: bytes,
-        pdu: bytes,
+        packet: bytes,
         seen_server_ids: Set[int],
         seen_addresses: Set[Tuple[int, Tuple]],
         *,
         missing_only: bool,
         best_effort: bool,
     ) -> int:
-        try:
-            packet = build_authenticated_packet(
-                pdu,
-                self.auth_info,
-                request_id=request_id,
-                timestamp_ms=self._clock_ms(),
-            )
-        except (TypeError, ValueError):
+        if not packet:
             return RCLIENT_ERR_PROTOCOL
-        except Exception:
-            return RCLIENT_ERR_AUTH
         # One unreachable endpoint must not discard the endpoints behind it: a
         # dual-stack SRV target expands to one endpoint per address sharing a
         # server id, so an IPv6 address on an IPv4-only host would otherwise
@@ -360,6 +350,17 @@ class RateLimitlyClient:
         best: Optional[RateLimitResult] = None
         rebind_requested = False
         start_ms = self._clock_ms()
+        try:
+            packet = build_authenticated_packet(
+                pdu,
+                self.auth_info,
+                request_id=request_id,
+                timestamp_ms=start_ms,
+            )
+        except (TypeError, ValueError):
+            return RCLIENT_ERR_PROTOCOL, None
+        except Exception:
+            return RCLIENT_ERR_AUTH, None
         round_start_ms = start_ms
 
         for round_index in range(self.policy.replay_count + 1):
@@ -368,8 +369,7 @@ class RateLimitlyClient:
             preference_deadline_ms = round_deadline_ms if round_index == 0 else round_start_ms
             status = self._send_request(
                 endpoints,
-                request_id,
-                pdu,
+                packet,
                 seen_server_ids,
                 seen_addresses,
                 missing_only=round_index > 0,
@@ -430,8 +430,7 @@ class RateLimitlyClient:
         if self.policy.completion_delivery and self._clock_ms() < start_ms + horizon_ms:
             self._send_request(
                 endpoints,
-                request_id,
-                pdu,
+                packet,
                 seen_server_ids,
                 seen_addresses,
                 missing_only=True,
