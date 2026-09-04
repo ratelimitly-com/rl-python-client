@@ -361,17 +361,6 @@ class RateLimitlyClient:
             return RCLIENT_ERR_PROTOCOL, None
         except Exception:
             return RCLIENT_ERR_AUTH, None
-        allowed_server_ids = {
-            target.server_id for target in endpoints if target.server_id is not None
-        }
-        if len(allowed_server_ids) != len({target.server_id for target in endpoints}):
-            # At least one target lacked an ID: match C and accept any responder.
-            allowed_server_ids.clear()
-        oldest_server_id = min(allowed_server_ids) if allowed_server_ids else None
-        seen_server_ids: Set[int] = set()
-        seen_addresses: Set[Tuple[int, Tuple]] = set()
-        best: Optional[RateLimitResult] = None
-        rebind_requested = False
         round_start_ms = start_ms
 
         for round_index in range(self.policy.replay_count + 1):
