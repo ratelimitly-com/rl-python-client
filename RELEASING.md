@@ -14,22 +14,12 @@ numeric version, it downloads that version's existing GitHub release, rejects
 missing or unexpected files, verifies `SHA256SUMS` and package metadata, and
 uploads those exact bytes to PyPI.
 
-## One-time PyPI setup
+## Authentication and setup
 
-Create the GitHub environment `pypi`, then register a PyPI pending Trusted
-Publisher with these values:
+PyPI publishing uses an API token stored as a GitHub Actions secret:
 
-- PyPI project: `ratelimitly`
-- GitHub owner: `ratelimitly-com`
-- GitHub repository: `rl-python-client`
-- Workflow filename: `publish-pypi.yml`
-- Environment: `pypi`
-
-Trusted Publishing uses GitHub's short-lived OIDC identity. Do not create a
-PyPI API token or store one as a GitHub secret.
-
-If PyPI approves a `ratelimitly` organization, assign the project to that
-organization and grant publishing authority through a narrowly scoped team.
+- Secret name: `PYPI_API_TOKEN` (or `PYPI_TOKEN`)
+- Permission: Scoped API token with upload permissions for the `ratelimitly` project on PyPI
 
 ## Publish an existing release
 
