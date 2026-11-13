@@ -20,7 +20,7 @@ def random_bytes(generator, length):
 class CResource(ctypes.Structure):
     _fields_ = [
         ("bucket_id", ctypes.c_ubyte * 16),
-        ("window_size_ms", ctypes.c_uint32),
+        ("window_size_ms", ctypes.c_uint64),
         ("rate_limit", ctypes.c_uint32),
         ("tokens_requested", ctypes.c_uint16),
     ]
@@ -57,7 +57,7 @@ class TestCReference(unittest.TestCase):
         cls.library.r_client_derive_bucket_id.argtypes = [
             ctypes.c_void_p,
             ctypes.c_size_t,
-            ctypes.c_uint32,
+            ctypes.c_uint64,
             ctypes.c_uint32,
             byte_pointer,
         ]
@@ -91,10 +91,15 @@ class TestCReference(unittest.TestCase):
     def test_randomized_identifier_derivation_matches_c(self):
         generator = random.Random(0xC0FFEE)
         output = (ctypes.c_ubyte * 16)()
-        for _ in range(200):
+        for index in range(200):
             name = random_bytes(generator, generator.randrange(0, 65))
             storage = ctypes.create_string_buffer(name) if name else None
-            window_size_ms = generator.randrange(0, 2**32)
+            if index == 0:
+                window_size_ms = 10
+            elif index == 1:
+                window_size_ms = 31_536_000_000
+            else:
+                window_size_ms = generator.randrange(1, 3_153_600_001) * 10
             rate_limit = generator.randrange(0, 2**32)
             self.assertEqual(
                 self.library.r_client_derive_bucket_id(
@@ -130,7 +135,7 @@ class TestCReference(unittest.TestCase):
             for _ in range(generator.randrange(0, 4)):
                 values = (
                     random_bytes(generator, 16),
-                    generator.randrange(0, 2**32),
+                    generator.randrange(1, 3_153_600_001) * 10,
                     generator.randrange(0, 2**32),
                     generator.randrange(0, 2**16),
                 )

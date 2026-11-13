@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 
 from ratelimitly.auth import parse_auth_key
 
-VECTORS_PATH = Path(__file__).parent / "fixtures/api_key_v1_test_vectors.json"
+VECTORS_PATH = Path(__file__).parent / "fixtures/api_key_v2_test_vectors.json"
 
 
 class TestAuthKeyParser(unittest.TestCase):
@@ -23,7 +23,7 @@ class TestAuthKeyParser(unittest.TestCase):
             if vector["auth_method"] == "aes"
         )
 
-    def test_normative_api_key_v1_vectors(self):
+    def test_normative_api_key_v2_vectors(self):
         for vector in self.vectors["valid_credentials"]:
             if vector["auth_method"] == "none":
                 continue
@@ -34,7 +34,13 @@ class TestAuthKeyParser(unittest.TestCase):
                 self.assertEqual(info.key_id, int(vector["key_id"]))
                 self.assertEqual(info.secret.hex(), vector["secret_hex"])
                 for field, expected in vector["quotas"].items():
-                    self.assertEqual(getattr(info, field), expected)
+                    if field == "rate_window_size_ms_max" and expected == "unlimited":
+                        self.assertIsNone(info.rate_window_size_ms_max)
+                        self.assertTrue(info.rate_window_unlimited)
+                    else:
+                        self.assertEqual(getattr(info, field), expected)
+                        if field == "rate_window_size_ms_max":
+                            self.assertFalse(info.rate_window_unlimited)
                 self.assertEqual(
                     info.default_dns_srv,
                     f"c-{info.key_id}.p0.ratelimitly.com",

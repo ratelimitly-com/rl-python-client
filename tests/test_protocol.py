@@ -22,16 +22,32 @@ from ratelimitly.protocol import (
 from ratelimitly.types import LatencyGuard, ResourceRequest, ServiceLatencyReport
 
 
-COOKIE_KEY = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys"
-AES_KEY = "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtruhcxwfed9"
+COOKIE_KEY = "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulcz2hmcw"
+AES_KEY = "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m"
 
 
 class TestCanonicalIdentifiers(unittest.TestCase):
     def test_bucket_known_answer_from_c_client(self):
         self.assertEqual(
             r_client_derive_bucket_id("checkout", 1000, 100).hex(),
-            "f5cf3ad8b8406854b596ba3614f16eff",
+            "67f3b7c9ab155308089e20ca8d943909",
         )
+        self.assertEqual(
+            r_client_derive_bucket_id("a", 10, 1).hex(),
+            "5b0b0d61aa7c806a0ff9e5973bf3cacb",
+        )
+        self.assertEqual(
+            r_client_derive_bucket_id(
+                b"binary\x00bucket", 31_536_000_000, 0xFFFFFFFF
+            ).hex(),
+            "552c6b8185f1d61ebc3ccc65f446ec88",
+        )
+
+    def test_invalid_bucket_windows_are_rejected(self):
+        for bad_window in (0, 5, 9, 15, 1_005, 31_536_000_010):
+            with self.subTest(window_size_ms=bad_window):
+                with self.assertRaises(ValueError):
+                    r_client_derive_bucket_id("checkout", bad_window, 100)
 
     def test_tracker_known_answer_from_c_client(self):
         self.assertEqual(
@@ -74,7 +90,7 @@ class TestWireProtocol(unittest.TestCase):
             + "01" * 16
             + "e80300000a000000020000003200000000000000"
             + "02" * 16
-            + "60ea00006400000003000000"
+            + "701700006400000003000000"
             + "4d4c0c000300617069000000",
         )
 
@@ -85,7 +101,7 @@ class TestWireProtocol(unittest.TestCase):
 
     def test_rate_request_pdu_carries_dedup_ttl(self):
         pdu = build_rate_request_pdu(60, b"\x00\x00\x00\x00")
-        self.assertEqual(pdu.hex(), "52540c003c00000000000000")
+        self.assertEqual(pdu.hex(), "54320c003c00000000000000")
 
     def test_latency_report_body_and_pdu_match_c_layout(self):
         report = ServiceLatencyReport(b"svc" + b"\x00" * 13, 25, 1000, 10, 1)
@@ -112,7 +128,7 @@ class TestWireProtocol(unittest.TestCase):
             + (50).to_bytes(4, "little")
             + (25).to_bytes(4, "little")
             + b"b" * 16
-            + (60000).to_bytes(4, "little")
+            + (6000).to_bytes(4, "little")
             + (77).to_bytes(4, "little")
             + (0).to_bytes(2, "little")
             + b"\x00\x00"
@@ -164,6 +180,19 @@ class TestWireProtocol(unittest.TestCase):
         tampered[4] ^= 1
         with self.assertRaises(ValueError):
             parse_rate_response_packet(bytes(tampered), auth)
+
+    def test_legacy_rr_response_pdu_is_rejected(self):
+        auth = parse_auth_key(COOKIE_KEY)
+        legacy_pdu = build_pdu(0x5252, b"\x00\x00\x00\x00")
+        packet = build_authenticated_packet(
+            legacy_pdu,
+            auth,
+            request_id=bytes(range(16)),
+            timestamp_ms=1234,
+            tenant_id=7,
+        )
+        with self.assertRaises(ValueError):
+            parse_rate_response_packet(packet, auth)
 
 
 if __name__ == "__main__":

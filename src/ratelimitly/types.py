@@ -16,7 +16,11 @@ RCLIENT_ERR_NOMEM = -7
 
 @dataclass(frozen=True)
 class ResourceRequest:
-    """One requested consumption from a content-defined rate bucket."""
+    """One requested consumption from a content-defined rate bucket.
+
+    ``window_size_ms`` must be a multiple of 10 ms between 10 ms and
+    31_536_000_000 ms (365 days).
+    """
 
     bucket_id: bytes
     window_size_ms: int

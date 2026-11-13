@@ -10,10 +10,11 @@ RateLimitlyClient(
 )
 ```
 
-The credential is decoded and its format version, API-key ID, authentication
+The credential is decoded and its format version (`2`), API-key ID, authentication
 mode, secret, and six quotas are validated at construction. `AuthKeyInfo`
-exposes `format_version`, the five existing quota fields, and
-`rate_window_size_ms_max`. When `dns_srv` is omitted, the client derives
+exposes `format_version`, the five existing quota fields,
+`rate_window_size_ms_max` (`None` when unlimited, or a named cap up to `31_536_000_000` ms / 365 days),
+and `rate_window_unlimited`. When `dns_srv` is omitted, the client derives
 `c-<key-id>.p0.ratelimitly.com`.
 
 The client caches DNS results and UDP sockets across calls. It is intentionally lock-free like `rl-c-client`; serialize all operations on one instance. Use one instance per worker when requests can execute concurrently.
@@ -49,7 +50,7 @@ Resource and guard counts are independent:
 @dataclass(frozen=True)
 class ResourceRequest:
     bucket_id: bytes          # Exactly 16 bytes.
-    window_size_ms: int       # uint32.
+    window_size_ms: int       # Multiple of 10 ms in [10, 31_536_000_000] (10 ms..365 d).
     rate_limit: int           # uint32.
     tokens_requested: int     # uint16.
 
@@ -62,8 +63,9 @@ class LatencyGuard:
     min_sample_threshold: int # uint32.
 ```
 
-Resource windows are validated against the credential's `rate_window_size_ms_max`;
-the complete logical request fails when any one resource exceeds the limit.
+Resource windows must be valid `10 ms`-aligned durations (`10 ms..365 d`) and are
+validated against the credential's `rate_window_size_ms_max` when finite;
+the complete logical request fails with `RCLIENT_ERR_PROTOCOL` when any one resource violates the contract.
 
 ## Results
 
@@ -156,7 +158,7 @@ Domains and fields:
 
 | Kind | Domain, including final NUL | Ordered fields |
 | --- | --- | --- |
-| Rate bucket | `ratelimitly.resource.v1\0` | `window_size_ms`, `rate_limit` |
+| Rate bucket | `ratelimitly.resource.v2\0` | `window_size_ms // 10`, `rate_limit` |
 | Latency tracker | `ratelimitly.latency-tracker.v2\0` | `ttl_ms`, `max_samples`, `min_sample_threshold` |
 
 The final NUL is part of the contract because the C implementation hashes `sizeof(domain_array)`. BLAKE2s-256 is computed first and then truncated. `BLAKE2s(digest_size=16)` is a different function and is not conformant.
@@ -165,7 +167,7 @@ Known-answer vectors shared with the wire-v2 `rl-c-client` contract:
 
 | Input | ID, hexadecimal |
 | --- | --- |
-| bucket `checkout`, window `1000`, rate `100` | `f5cf3ad8b8406854b596ba3614f16eff` |
+| bucket `checkout`, window `1000` (`100` x 10 ms), rate `100` | `67f3b7c9ab155308089e20ca8d943909` |
 | tracker `inventory-backend`, TTL `10000`, max `100`, minimum `5` | `6a17d07a424568304e50d28540f76e67` |
 | tracker bytes `binary\0tracker`, every field `UINT32_MAX` | `2944d00ab0f1829a4d598d47f32fb0fa` |
 

@@ -52,7 +52,7 @@ AES authentication uses a 32-byte TLV: four-byte header, 12-byte nonce, and 16-b
 
 ## Rate request PDU
 
-The PDU header is eight bytes: type `0x5452`, total PDU size, and `dedup_ttl_ms`. The body starts with `uint16 guard_count` and `uint16 resource_count`, followed by guard blocks, resource blocks, and an optional metrics-label TLV.
+The PDU header is eight bytes: type `0x3254` (`"T2"`, or `0x3252` `"R2"` on responses), total PDU size, and `dedup_ttl_ms`. The body starts with `uint16 guard_count` and `uint16 resource_count`, followed by guard blocks, resource blocks, and an optional metrics-label TLV.
 
 Guard blocks are 36 bytes:
 
@@ -61,10 +61,10 @@ tracker_id[16], ttl_ms:u32, max_samples:u32,
 min_sample_threshold:u32, threshold_ms:u32, current_latency:u32=0
 ```
 
-Resource blocks are 28 bytes:
+Resource blocks are 28 bytes (with `window_size_10ms` in `10 ms` units, range `1..=3153600000` for `10 ms..365 d`):
 
 ```text
-bucket_id[16], window_size_ms:u32, rate_limit:u32,
+bucket_id[16], window_size_10ms:u32, rate_limit:u32,
 tokens_requested:u16, padding:u16=0
 ```
 

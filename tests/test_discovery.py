@@ -17,7 +17,7 @@ from ratelimitly.discovery import (
 )
 
 
-COOKIE_KEY = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys"
+COOKIE_KEY = "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulcz2hmcw"
 
 
 class TestDiscovery(unittest.TestCase):
