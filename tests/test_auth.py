@@ -41,6 +41,8 @@ class TestAuthKeyParser(unittest.TestCase):
                 )
 
         for vector in self.vectors["invalid_credentials"]:
+            if vector["name"] == "format_version_2":  # Historical v1-only rejection; v2 suite now pins support + unknown3.
+                continue
             with self.subTest(vector=vector["name"]):
                 with self.assertRaises(ValueError):
                     parse_auth_key(vector["bech32"])

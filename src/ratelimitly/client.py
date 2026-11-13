@@ -72,7 +72,9 @@ class RateLimitlyClient:
         clock_ms: Clock = _wall_time_ms,
         socket_factory: SocketFactory = socket.socket,
         dns_refresh_interval_ms: int = 300_000,
+        wide_rate_requests: bool = False,
     ) -> None:
+        self.wide_rate_requests = wide_rate_requests
         self.auth_info: AuthKeyInfo = parse_auth_key(auth_key)
         self.dns_srv = dns_srv or self.auth_info.default_dns_srv
         self.policy = policy or default_request_policy()
@@ -185,6 +187,7 @@ class RateLimitlyClient:
         target: ServerEndpoint,
         seen_server_ids: Set[int],
         seen_addresses: Set[Tuple[int, Tuple]],
+        wide: bool = False,
     ) -> bool:
         if target.server_id is not None:
             return target.server_id in seen_server_ids
@@ -236,6 +239,7 @@ class RateLimitlyClient:
         best: Optional[RateLimitResult],
         seen_server_ids: Set[int],
         seen_addresses: Set[Tuple[int, Tuple]],
+        wide: bool = False,
     ) -> Tuple[Optional[RateLimitResult], bool, bool, int]:
         """Return (best, selected, rebind_requested, status)."""
         rebind_requested = False
@@ -270,7 +274,7 @@ class RateLimitlyClient:
                     consumed += 1
                     try:
                         response_request_id, result = parse_rate_response_packet(
-                            packet, self.auth_info
+                            packet, self.auth_info, wide=wide
                         )
                     except (TypeError, ValueError):
                         continue
@@ -311,7 +315,7 @@ class RateLimitlyClient:
             return RCLIENT_OK, RateLimitResult(True, 0, False, (), ())
         try:
             oversized_window = any(
-                resource.window_size_ms > self.auth_info.rate_window_size_ms_max
+                self.auth_info.rate_window_size_ms_max is not None and resource.window_size_ms > self.auth_info.rate_window_size_ms_max
                 for resource in exact_resources
             )
         except (AttributeError, TypeError):
@@ -323,10 +327,13 @@ class RateLimitlyClient:
             horizon_ms = self.policy.calculate_horizon_ms(
                 self.auth_info.dedup_ttl_ms_max
             )
+            wide = any(r.window_size_ms > 0xFFFFFFFF for r in exact_resources)
+            if wide and not self.wide_rate_requests:
+                raise ValueError("wide-rate server support must be explicitly configured")
             body = build_rate_request_body(
-                exact_resources, exact_guards, metrics_label
+                exact_resources, exact_guards, metrics_label, wide=wide
             )
-            pdu = build_rate_request_pdu(horizon_ms, body)
+            pdu = build_rate_request_pdu(horizon_ms, body, wide=wide)
         except (TypeError, ValueError):
             return RCLIENT_ERR_PROTOCOL, None
 
@@ -389,6 +396,7 @@ class RateLimitlyClient:
                 best,
                 seen_server_ids,
                 seen_addresses,
+                wide=wide,
             )
             rebind_requested = rebind_requested or phase_rebind
             if phase_status != RCLIENT_OK:
@@ -415,6 +423,7 @@ class RateLimitlyClient:
                 best,
                 seen_server_ids,
                 seen_addresses,
+                wide=wide,
             )
             rebind_requested = rebind_requested or phase_rebind
             if phase_status != RCLIENT_OK:

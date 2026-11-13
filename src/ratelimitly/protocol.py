@@ -31,6 +31,11 @@ R_TLV_METRICS_LABEL = 0x4C4D
 
 R_PDU_RATE_REQUEST = 0x5452
 R_PDU_RATE_RESPONSE = 0x5252
+R_PDU_WIDE_RATE_REQUEST = 0x5751
+R_PDU_WIDE_RATE_RESPONSE = 0x5752
+WIDE_RATE_REQUESTS = 1 << 5
+MAX_WIDE_WINDOW_MS = 31536000000
+
 R_PDU_LATENCY_REPORT = 0x524C
 
 IdentifierName = Union[str, bytes, bytearray, memoryview]
@@ -110,6 +115,11 @@ def r_client_derive_bucket_id(
     rate_limit: int,
 ) -> bytes:
     """Derive the canonical C-compatible 16-byte rate-bucket ID."""
+    if window_size_ms > 0xFFFFFFFF:
+        _integer(window_size_ms, "window_size_ms", MAX_WIDE_WINDOW_MS)
+        name = _identifier_name_bytes(bucket_name)
+        preimage = b"ratelimitly.resource.v2\0" + struct.pack("<I", len(name)) + name + struct.pack("<QI", window_size_ms, _uint32(rate_limit, "rate_limit"))
+        return hashlib.blake2s(preimage).digest()[:16]
     return _derive_content_id(
         b"ratelimitly.resource.v1",
         bucket_name,
@@ -151,8 +161,9 @@ def build_rate_request_body(
     resources: Sequence[ResourceRequest],
     guards: Sequence[LatencyGuard],
     metrics_label: Optional[WireText] = None,
+    *, wide: bool = False,
 ) -> bytes:
-    if len(resources) > 0xFFFF or len(guards) > 0xFFFF:
+    if len(resources) > 16 or len(guards) > 16:
         raise ValueError("request entry count exceeds uint16")
 
     body = bytearray(struct.pack("<HH", len(guards), len(resources)))
@@ -170,11 +181,13 @@ def build_rate_request_body(
         )
 
     for index, resource in enumerate(resources):
+        if wide and not 1 <= _integer(resource.window_size_ms, "wide window", MAX_WIDE_WINDOW_MS):
+            raise ValueError("wide window must be positive")
         body.extend(
             struct.pack(
-                "<16sIIHH",
+                "<16sQIHH" if wide else "<16sIIHH",
                 _id16(resource.bucket_id, f"resources[{index}].bucket_id"),
-                _uint32(resource.window_size_ms, f"resources[{index}].window_size_ms"),
+                resource.window_size_ms if wide else _uint32(resource.window_size_ms, f"resources[{index}].window_size_ms"),
                 _uint32(resource.rate_limit, f"resources[{index}].rate_limit"),
                 _uint16(resource.tokens_requested, f"resources[{index}].tokens_requested"),
                 0,
@@ -221,7 +234,7 @@ def build_pdu(pdu_type: int, body: bytes) -> bytes:
     return struct.pack("<HHHH", _uint16(pdu_type, "pdu_type"), pdu_size, 0, 0) + exact_body
 
 
-def build_rate_request_pdu(dedup_ttl_ms: int, body: bytes) -> bytes:
+def build_rate_request_pdu(dedup_ttl_ms: int, body: bytes, *, wide: bool = False) -> bytes:
     if not isinstance(body, (bytes, bytearray, memoryview)):
         raise TypeError("body must be bytes-like")
     exact_body = bytes(body)
@@ -229,7 +242,7 @@ def build_rate_request_pdu(dedup_ttl_ms: int, body: bytes) -> bytes:
     if pdu_size > 0xFFFF or pdu_size > R_MAX_PACKET_SIZE:
         raise ValueError("rate-request PDU exceeds the client packet limit")
     return struct.pack(
-        "<HHI", R_PDU_RATE_REQUEST, pdu_size, _uint32(dedup_ttl_ms, "dedup_ttl_ms")
+        "<HHI", R_PDU_WIDE_RATE_REQUEST if wide else R_PDU_RATE_REQUEST, pdu_size, _uint32(dedup_ttl_ms, "dedup_ttl_ms")
     ) + exact_body
 
 
@@ -343,22 +356,25 @@ def _extract_authenticated_pdu(
     return request_id, server_id, pdu, bool(steering)
 
 
-def parse_rate_response_packet(packet: bytes, auth: AuthKeyInfo) -> Tuple[bytes, RateLimitResult]:
+def parse_rate_response_packet(packet: bytes, auth: AuthKeyInfo, *, wide: bool = False) -> Tuple[bytes, RateLimitResult]:
     request_id, server_id, pdu, steering = _extract_authenticated_pdu(bytes(packet), auth)
     if len(pdu) < R_PDU_HEADER_LEN:
         raise ValueError("truncated response PDU")
     pdu_type, pdu_size = struct.unpack_from("<HH", pdu)
-    if pdu_type != R_PDU_RATE_RESPONSE or pdu_size < R_PDU_HEADER_LEN or pdu_size > len(pdu):
+    if pdu_type != (R_PDU_WIDE_RATE_RESPONSE if wide else R_PDU_RATE_RESPONSE) or pdu_size < R_PDU_HEADER_LEN or pdu_size > len(pdu):
         raise ValueError("invalid rate-response PDU")
     body = pdu[R_PDU_HEADER_LEN:pdu_size]
     if len(body) < 4:
         raise ValueError("truncated rate-response body")
 
     guard_count, resource_count = struct.unpack_from("<HH", body)
+    if guard_count > 16 or resource_count > 16:
+        raise ValueError("response count exceeds 16")
+    resource_stride = 32 if wide else R_RESOURCE_BLOCK_WIRE_LEN
     expected = (
         4
         + guard_count * R_GUARD_BLOCK_WIRE_LEN
-        + resource_count * R_RESOURCE_BLOCK_WIRE_LEN
+        + resource_count * resource_stride
     )
     if len(body) < expected:
         raise ValueError("truncated rate-response entries")
@@ -383,11 +399,11 @@ def parse_rate_response_packet(packet: bytes, auth: AuthKeyInfo) -> Tuple[bytes,
     resources = []
     for _ in range(resource_count):
         bucket_id, _window, actual_rate, deficit, _padding = struct.unpack_from(
-            "<16sIIHH", body, offset
+            "<16sQIHH" if wide else "<16sIIHH", body, offset
         )
         resources.append(ResourceResult(bucket_id, deficit, actual_rate))
         success = success and deficit == 0
-        offset += R_RESOURCE_BLOCK_WIRE_LEN
+        offset += resource_stride
 
     return request_id, RateLimitResult(
         success=success,
