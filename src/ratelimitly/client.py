@@ -19,6 +19,7 @@ from .protocol import (
     build_rate_request_body,
     build_rate_request_pdu,
     parse_rate_response_packet,
+    validate_rate_window_ms,
 )
 from .steering import (
     bind_next_steering_socket,
@@ -310,13 +311,15 @@ class RateLimitlyClient:
         if not exact_resources and not exact_guards:
             return RCLIENT_OK, RateLimitResult(True, 0, False, (), ())
         try:
-            oversized_window = any(
-                resource.window_size_ms > self.auth_info.rate_window_size_ms_max
-                for resource in exact_resources
-            )
-        except (AttributeError, TypeError):
-            return RCLIENT_ERR_PROTOCOL, None
-        if oversized_window:
+            for resource in exact_resources:
+                validate_rate_window_ms(resource.window_size_ms)
+                if (
+                    self.auth_info.rate_window_size_ms_max is not None
+                    and resource.window_size_ms
+                    > self.auth_info.rate_window_size_ms_max
+                ):
+                    return RCLIENT_ERR_PROTOCOL, None
+        except (AttributeError, TypeError, ValueError):
             return RCLIENT_ERR_PROTOCOL, None
 
         try:

@@ -1,11 +1,44 @@
 """Bech32 authentication key parser for RateLimitly credentials."""
 
 from dataclasses import dataclass
-from typing import List, Literal, Tuple
+from typing import List, Literal, Optional, Tuple
 
 BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 BECH32_REV = {c: i for i, c in enumerate(BECH32_CHARSET)}
-TENANT_KEY_FORMAT_VERSION = 1
+TENANT_KEY_FORMAT_VERSION = 2
+
+NAMED_RATE_WINDOW_MS: Tuple[int, ...] = (
+    1_000,
+    5_000,
+    10_000,
+    15_000,
+    30_000,
+    60_000,
+    120_000,
+    180_000,
+    300_000,
+    600_000,
+    900_000,
+    1_800_000,
+    2_700_000,
+    3_600_000,
+    7_200_000,
+    10_800_000,
+    18_000_000,
+    21_600_000,
+    28_800_000,
+    43_200_000,
+    86_400_000,
+    172_800_000,
+    432_000_000,
+    604_800_000,
+    1_209_600_000,
+    2_419_200_000,
+    2_592_000_000,
+    7_776_000_000,
+    15_724_800_000,
+    31_536_000_000,
+)
 
 
 @dataclass(frozen=True)
@@ -19,7 +52,12 @@ class AuthKeyInfo:
     metrics_labels_max: int
     latency_buffer_size_max: int
     dedup_ttl_ms_max: int
-    rate_window_size_ms_max: int
+    rate_window_size_ms_max: Optional[int]
+
+    @property
+    def rate_window_unlimited(self) -> bool:
+        """Whether this credential allows any protocol-valid rate window."""
+        return self.rate_window_size_ms_max is None
 
     @property
     def default_dns_srv(self) -> str:
@@ -91,13 +129,13 @@ def _convertbits(data: List[int], frombits: int, tobits: int, pad: bool = True) 
     return bytes(ret)
 
 
-def _decode_quota_word(word: int) -> Tuple[int, int, int, int, int, int]:
+def _decode_quota_word(word: int) -> Tuple[int, int, int, int, int, Optional[int]]:
     rate_exp = word & 0x1F
     latency_exp = (word >> 5) & 0x1F
     labels_exp = (word >> 10) & 0x1F
     buffer_exp = (word >> 15) & 0x0F
     dedup_units = (word >> 19) & 0xFF
-    window_exp = (word >> 27) & 0x1F
+    window_code = (word >> 27) & 0x1F
 
     if rate_exp > 24:
         raise ValueError("Invalid packed rate_buckets_max quota")
@@ -105,6 +143,8 @@ def _decode_quota_word(word: int) -> Tuple[int, int, int, int, int, int]:
         raise ValueError("Invalid packed latency_services_max quota")
     if not 1 <= dedup_units <= 200:
         raise ValueError("Invalid packed dedup_ttl_ms_max quota")
+    if window_code == 0:
+        raise ValueError("Invalid packed rate_window_size_ms_max quota")
 
     return (
         1 << rate_exp,
@@ -112,7 +152,7 @@ def _decode_quota_word(word: int) -> Tuple[int, int, int, int, int, int]:
         1 << labels_exp,
         1 << buffer_exp,
         dedup_units * 10,
-        0xFFFFFFFF if window_exp == 31 else 1 << window_exp,
+        None if window_code == 31 else NAMED_RATE_WINDOW_MS[window_code - 1],
     )
 
 

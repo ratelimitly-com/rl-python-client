@@ -1,6 +1,6 @@
 {
-  "schema": "ratelimitly.api-key-v1-test-vectors/1",
-  "format_version": 1,
+  "schema": "ratelimitly.api-key-v2-test-vectors/1",
+  "format_version": 2,
   "valid_credentials": [
     {
       "name": "default_none",
@@ -13,78 +13,78 @@
         "metrics_labels_max": 4096,
         "latency_buffer_size_max": 32,
         "dedup_ttl_ms_max": 300,
-        "rate_window_size_ms_max": 4294967295
+        "rate_window_size_ms_max": "unlimited"
       },
-      "payload_hex": "01080706050403020150b1f2f8",
-      "bech32": "rl-none1qyyqwps9qspsyq2sk8e0sfdp3ys"
+      "payload_hex": "02080706050403020150b1f2f8",
+      "bech32": "rl-none1qgyqwps9qspsyq2sk8e0shcgndc"
     },
     {
       "name": "minimum_cookie",
       "auth_method": "cookie",
       "key_id": "1",
       "secret_hex": "0101010101010101010101010101010101010101010101010101010101010101",
-      "quota_word_hex_le": "00000800",
+      "quota_word_hex_le": "00000808",
       "quotas": {
         "rate_buckets_max": 1,
         "latency_services_max": 1,
         "metrics_labels_max": 1,
         "latency_buffer_size_max": 1,
         "dedup_ttl_ms_max": 10,
-        "rate_window_size_ms_max": 1
+        "rate_window_size_ms_max": 1000
       },
-      "payload_hex": "010100000000000000010101010101010101010101010101010101010101010101010101010101010100000800",
-      "bech32": "rl-cookie1qyqsqqqqqqqqqqqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqqqzqqfs0x84"
+      "payload_hex": "020100000000000000010101010101010101010101010101010101010101010101010101010101010100000808",
+      "bech32": "rl-cookie1qgqsqqqqqqqqqqqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqqqzqghe5qw8"
     },
     {
       "name": "free_plan_aes",
       "auth_method": "aes",
       "key_id": "2",
       "secret_hex": "0202020202020202020202020202020202020202020202020202020202020202",
-      "quota_word_hex_le": "2f2df2b0",
+      "quota_word_hex_le": "2f2df230",
       "quotas": {
         "rate_buckets_max": 32768,
         "latency_services_max": 512,
         "metrics_labels_max": 2048,
         "latency_buffer_size_max": 16,
         "dedup_ttl_ms_max": 300,
-        "rate_window_size_ms_max": 4194304
+        "rate_window_size_ms_max": 60000
       },
-      "payload_hex": "01020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2b0",
-      "bech32": "rl-aes1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmu4scddmk3"
+      "payload_hex": "02020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df230",
+      "bech32": "rl-aes1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmu3sdl8zyx"
     },
     {
       "name": "pro_plan_cookie",
       "auth_method": "cookie",
       "key_id": "3",
       "secret_hex": "0303030303030303030303030303030303030303030303030303030303030303",
-      "quota_word_hex_le": "50b1f2d8",
+      "quota_word_hex_le": "50b1f270",
       "quotas": {
         "rate_buckets_max": 65536,
         "latency_services_max": 1024,
         "metrics_labels_max": 4096,
         "latency_buffer_size_max": 32,
         "dedup_ttl_ms_max": 300,
-        "rate_window_size_ms_max": 134217728
+        "rate_window_size_ms_max": 3600000
       },
-      "payload_hex": "010300000000000000030303030303030303030303030303030303030303030303030303030303030350b1f2d8",
-      "bech32": "rl-cookie1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtrukcen35ze"
+      "payload_hex": "020300000000000000030303030303030303030303030303030303030303030303030303030303030350b1f270",
+      "bech32": "rl-cookie1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtrunsagsm94"
     },
     {
       "name": "business_plan_aes",
       "auth_method": "aes",
       "key_id": "4",
       "secret_hex": "0404040404040404040404040404040404040404040404040404040404040404",
-      "quota_word_hex_le": "9239f3e8",
+      "quota_word_hex_le": "9239f3a8",
       "quotas": {
         "rate_buckets_max": 262144,
         "latency_services_max": 4096,
         "metrics_labels_max": 16384,
         "latency_buffer_size_max": 64,
         "dedup_ttl_ms_max": 300,
-        "rate_window_size_ms_max": 536870912
+        "rate_window_size_ms_max": 86400000
       },
-      "payload_hex": "01040000000000000004040404040404040404040404040404040404040404040404040404040404049239f3e8",
-      "bech32": "rl-aes1qyzqqqqqqqqqqqqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqjfrnulg8ky0wz"
+      "payload_hex": "02040000000000000004040404040404040404040404040404040404040404040404040404040404049239f3a8",
+      "bech32": "rl-aes1qgzqqqqqqqqqqqqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqjfrnuagec9c0p"
     },
     {
       "name": "enterprise_plan_cookie",
@@ -98,10 +98,10 @@
         "metrics_labels_max": 65536,
         "latency_buffer_size_max": 128,
         "dedup_ttl_ms_max": 300,
-        "rate_window_size_ms_max": 4294967295
+        "rate_window_size_ms_max": "unlimited"
       },
-      "payload_hex": "0105000000000000000505050505050505050505050505050505050505050505050505050505050505d4c1f3f8",
-      "bech32": "rl-cookie1qyzsqqqqqqqqqqq9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9qh2vrulclr47kf"
+      "payload_hex": "0205000000000000000505050505050505050505050505050505050505050505050505050505050505d4c1f3f8",
+      "bech32": "rl-cookie1qgzsqqqqqqqqqqq9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9qh2vrulcl725px"
     },
     {
       "name": "maximum_aes",
@@ -115,10 +115,10 @@
         "metrics_labels_max": 2147483648,
         "latency_buffer_size_max": 32768,
         "dedup_ttl_ms_max": 2000,
-        "rate_window_size_ms_max": 4294967295
+        "rate_window_size_ms_max": "unlimited"
       },
-      "payload_hex": "01ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff18ff47fe",
-      "bech32": "rl-aes1q8llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllluv073l7r88xf4"
+      "payload_hex": "02ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff18ff47fe",
+      "bech32": "rl-aes1qtllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllluv073l7r6cv76"
     },
     {
       "name": "maximum_finite_window_cookie",
@@ -132,61 +132,68 @@
         "metrics_labels_max": 4096,
         "latency_buffer_size_max": 32,
         "dedup_ttl_ms_max": 300,
-        "rate_window_size_ms_max": 1073741824
+        "rate_window_size_ms_max": 31536000000
       },
-      "payload_hex": "010600000000000000060606060606060606060606060606060606060606060606060606060606060650b1f2f0",
-      "bech32": "rl-cookie1qyrqqqqqqqqqqqqxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqegtruhselxhvj"
+      "payload_hex": "020600000000000000060606060606060606060606060606060606060606060606060606060606060650b1f2f0",
+      "bech32": "rl-cookie1qgrqqqqqqqqqqqqxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqegtruhsezeama"
     }
   ],
   "invalid_credentials": [
     {
       "name": "reserved_rate_exponent_25",
       "auth_method": "aes",
-      "payload_hex": "010900000000000000090909090909090909090909090909090909090909090909090909090909090919000800",
-      "bech32": "rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyvsqzqqs45cew",
+      "payload_hex": "020900000000000000090909090909090909090909090909090909090909090909090909090909090919000808",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyvsqzqgwu07su",
       "error_category": "invalid_rate_buckets_max"
     },
     {
       "name": "reserved_rate_exponent_31",
       "auth_method": "aes",
-      "payload_hex": "01090000000000000009090909090909090909090909090909090909090909090909090909090909091f000800",
-      "bech32": "rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpy0sqzqqzpcatf",
+      "payload_hex": "02090000000000000009090909090909090909090909090909090909090909090909090909090909091f000808",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpy0sqzqgugrmzm",
       "error_category": "invalid_rate_buckets_max"
     },
     {
       "name": "reserved_latency_exponent_25",
       "auth_method": "aes",
-      "payload_hex": "010900000000000000090909090909090909090909090909090909090909090909090909090909090920030800",
-      "bech32": "rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpysqxzqqnetqym",
+      "payload_hex": "020900000000000000090909090909090909090909090909090909090909090909090909090909090920030808",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpysqxzqgdssxdf",
       "error_category": "invalid_latency_services_max"
     },
     {
       "name": "reserved_latency_exponent_31",
       "auth_method": "aes",
-      "payload_hex": "0109000000000000000909090909090909090909090909090909090909090909090909090909090909e0030800",
-      "bech32": "rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfp8sqxzqqp38f99",
+      "payload_hex": "0209000000000000000909090909090909090909090909090909090909090909090909090909090909e0030808",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfp8sqxzqglcu0vh",
       "error_category": "invalid_latency_services_max"
     },
     {
       "name": "invalid_dedup_code_0",
       "auth_method": "aes",
-      "payload_hex": "010900000000000000090909090909090909090909090909090909090909090909090909090909090900000000",
-      "bech32": "rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqqqqqurys6m",
+      "payload_hex": "020900000000000000090909090909090909090909090909090909090909090909090909090909090900000008",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqqqqgz2lknf",
       "error_category": "invalid_dedup_ttl_ms_max"
     },
     {
       "name": "invalid_dedup_code_201",
       "auth_method": "aes",
-      "payload_hex": "010900000000000000090909090909090909090909090909090909090909090909090909090909090900004806",
-      "bech32": "rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqqjqxdpgr6z",
+      "payload_hex": "02090000000000000009090909090909090909090909090909090909090909090909090909090909090000480e",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqqjqwngn9ns",
       "error_category": "invalid_dedup_ttl_ms_max"
     },
     {
       "name": "invalid_dedup_code_255",
       "auth_method": "aes",
-      "payload_hex": "01090000000000000009090909090909090909090909090909090909090909090909090909090909090000f807",
-      "bech32": "rl-aes1qyysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqp7q8era7ye",
+      "payload_hex": "02090000000000000009090909090909090909090909090909090909090909090909090909090909090000f80f",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqp7q082xcdt",
       "error_category": "invalid_dedup_ttl_ms_max"
+    },
+    {
+      "name": "invalid_window_code_0",
+      "auth_method": "aes",
+      "payload_hex": "020900000000000000090909090909090909090909090909090909090909090909090909090909090900000800",
+      "bech32": "rl-aes1qgysqqqqqqqqqqqfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyysjzgfpyqqqzqqc6fakd",
+      "error_category": "invalid_rate_window_size_ms_max"
     },
     {
       "name": "format_version_0",
@@ -196,38 +203,45 @@
       "error_category": "unsupported_format_version"
     },
     {
-      "name": "format_version_2",
+      "name": "format_version_1",
       "auth_method": "aes",
-      "payload_hex": "02020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2f8",
-      "bech32": "rl-aes1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhcchgqf0",
+      "payload_hex": "01020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2f8",
+      "bech32": "rl-aes1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhcc2h27q",
+      "error_category": "unsupported_format_version"
+    },
+    {
+      "name": "format_version_3",
+      "auth_method": "aes",
+      "payload_hex": "03020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2f8",
+      "bech32": "rl-aes1qvpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhccu6xy2",
       "error_category": "unsupported_format_version"
     },
     {
       "name": "secret_payload_too_short",
       "auth_method": "aes",
-      "payload_hex": "01020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2",
-      "bech32": "rl-aes1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmusgf2mxj",
+      "payload_hex": "02020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2",
+      "bech32": "rl-aes1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmusp2454x",
       "error_category": "invalid_payload_length"
     },
     {
       "name": "secret_payload_too_long",
       "auth_method": "aes",
-      "payload_hex": "01020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2f800",
-      "bech32": "rl-aes1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhcqqls7lnn",
+      "payload_hex": "02020000000000000002020202020202020202020202020202020202020202020202020202020202022f2df2f800",
+      "bech32": "rl-aes1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqghjmuhcqqennh24",
       "error_category": "invalid_payload_length"
     },
     {
       "name": "none_payload_too_short",
       "auth_method": "none",
-      "payload_hex": "01080706050403020150b1f2",
-      "bech32": "rl-none1qyyqwps9qspsyq2sk8eq5pcyvc",
+      "payload_hex": "02080706050403020150b1f2",
+      "bech32": "rl-none1qgyqwps9qspsyq2sk8eq3d3mar",
       "error_category": "invalid_payload_length"
     },
     {
       "name": "none_payload_too_long",
       "auth_method": "none",
-      "payload_hex": "01080706050403020150b1f2f800",
-      "bech32": "rl-none1qyyqwps9qspsyq2sk8e0sqqp66mdt",
+      "payload_hex": "02080706050403020150b1f2f800",
+      "bech32": "rl-none1qgyqwps9qspsyq2sk8e0sqqpjr88x",
       "error_category": "invalid_payload_length"
     },
     {

@@ -29,9 +29,13 @@ R_TLV_AUTH_COOKIE = 0x4143
 R_TLV_AUTH_AES = 0x4541
 R_TLV_METRICS_LABEL = 0x4C4D
 
-R_PDU_RATE_REQUEST = 0x5452
-R_PDU_RATE_RESPONSE = 0x5252
+R_PDU_RATE_REQUEST = 0x3254
+R_PDU_RATE_RESPONSE = 0x3252
 R_PDU_LATENCY_REPORT = 0x524C
+
+R_RATE_WINDOW_UNIT_MS = 10
+R_MIN_RATE_WINDOW_MS = 10
+R_MAX_RATE_WINDOW_MS = 31_536_000_000
 
 IdentifierName = Union[str, bytes, bytearray, memoryview]
 WireText = Union[str, bytes, bytearray, memoryview]
@@ -73,6 +77,21 @@ def _uint64(value: int, field_name: str) -> int:
     return _integer(value, field_name, 0xFFFFFFFFFFFFFFFF)
 
 
+def validate_rate_window_ms(value: int, field_name: str = "window_size_ms") -> int:
+    """Validate a millisecond rate window (10 ms..365 d in 10 ms steps) and return ticks."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer")
+    if not R_MIN_RATE_WINDOW_MS <= value <= R_MAX_RATE_WINDOW_MS:
+        raise ValueError(
+            f"{field_name} must be in range {R_MIN_RATE_WINDOW_MS}..{R_MAX_RATE_WINDOW_MS}"
+        )
+    if value % R_RATE_WINDOW_UNIT_MS != 0:
+        raise ValueError(
+            f"{field_name} must be a multiple of {R_RATE_WINDOW_UNIT_MS} ms"
+        )
+    return value // R_RATE_WINDOW_UNIT_MS
+
+
 def _id16(value: bytes, field_name: str) -> bytes:
     if not isinstance(value, (bytes, bytearray, memoryview)):
         raise TypeError(f"{field_name} must be bytes-like")
@@ -110,10 +129,11 @@ def r_client_derive_bucket_id(
     rate_limit: int,
 ) -> bytes:
     """Derive the canonical C-compatible 16-byte rate-bucket ID."""
+    window_ticks = validate_rate_window_ms(window_size_ms, "window_size_ms")
     return _derive_content_id(
-        b"ratelimitly.resource.v1",
+        b"ratelimitly.resource.v2",
         bucket_name,
-        (window_size_ms, rate_limit),
+        (window_ticks, rate_limit),
     )
 
 
@@ -170,11 +190,14 @@ def build_rate_request_body(
         )
 
     for index, resource in enumerate(resources):
+        window_ticks = validate_rate_window_ms(
+            resource.window_size_ms, f"resources[{index}].window_size_ms"
+        )
         body.extend(
             struct.pack(
                 "<16sIIHH",
                 _id16(resource.bucket_id, f"resources[{index}].bucket_id"),
-                _uint32(resource.window_size_ms, f"resources[{index}].window_size_ms"),
+                window_ticks,
                 _uint32(resource.rate_limit, f"resources[{index}].rate_limit"),
                 _uint16(resource.tokens_requested, f"resources[{index}].tokens_requested"),
                 0,

@@ -114,7 +114,7 @@ with RateLimitlyClient("rl-aes1...") as client:
 
 ## Canonical IDs must agree across clients
 
-Bucket IDs include the exact bucket-name bytes, `window_size_ms`, and `rate_limit`. Latency-tracker IDs include the exact tracker-name bytes, `ttl_ms`, `max_samples`, and `min_sample_threshold`; a guard threshold is deliberately not part of the tracker ID.
+Bucket IDs include the exact bucket-name bytes, `window_size_ms` (which must be a multiple of 10 ms between 10 ms and 31,536,000,000 ms, encoded as 10 ms ticks), and `rate_limit`. Latency-tracker IDs include the exact tracker-name bytes, `ttl_ms`, `max_samples`, and `min_sample_threshold`; a guard threshold is deliberately not part of the tracker ID.
 
 The Python helpers implement the same domain-separated binary preimage,
 little-endian integer encoding, BLAKE2s-256 digest, and 16-byte truncation as

@@ -34,8 +34,8 @@ from ratelimitly.protocol import (
 )
 
 
-COOKIE_KEY = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtruhcgpj8ys"
-COOKIE_KEY_WITH_1024_MS_RATE_WINDOW = "rl-cookie1qypqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgtrujsv8vz5n"
+COOKIE_KEY = "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrulcz2hmcw"
+COOKIE_KEY_WITH_1000_MS_RATE_WINDOW = "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqfgrrucgn2mh40"
 AUTH = parse_auth_key(COOKIE_KEY)
 
 
@@ -88,7 +88,7 @@ def response_packet(
             body.extend(value.to_bytes(4, "little"))
     if resource is not None:
         body.extend(resource.bucket_id)
-        body.extend(resource.window_size_ms.to_bytes(4, "little"))
+        body.extend((resource.window_size_ms // 10).to_bytes(4, "little"))
         body.extend((77).to_bytes(4, "little"))
         body.extend(deficit.to_bytes(2, "little"))
         body.extend(b"\x00\x00")
@@ -458,14 +458,30 @@ class TestClient(unittest.TestCase):
     def test_oversized_resource_window_is_rejected_before_dns(self):
         calls = []
         client = RateLimitlyClient(
-            COOKIE_KEY_WITH_1024_MS_RATE_WINDOW,
+            COOKIE_KEY_WITH_1000_MS_RATE_WINDOW,
             policy=policy(),
             resolver=lambda name: calls.append(name) or [],
         )
-        resource = ResourceRequest(b"b" * 16, 1025, 100, 1)
+        resource = ResourceRequest(b"b" * 16, 1010, 100, 1)
         status, result = client.check_rate_limit([resource])
         self.assertEqual(status, RCLIENT_ERR_PROTOCOL)
         self.assertIsNone(result)
+        self.assertEqual(calls, [])
+        client.close()
+
+    def test_unaligned_and_out_of_range_resource_window_is_rejected_before_dns(self):
+        calls = []
+        client = RateLimitlyClient(
+            COOKIE_KEY,
+            policy=policy(),
+            resolver=lambda name: calls.append(name) or [],
+        )
+        for bad_window in (0, 5, 9, 15, 1_005, 31_536_000_010):
+            with self.subTest(window_size_ms=bad_window):
+                resource = ResourceRequest(b"b" * 16, bad_window, 100, 1)
+                status, result = client.check_rate_limit([resource])
+                self.assertEqual(status, RCLIENT_ERR_PROTOCOL)
+                self.assertIsNone(result)
         self.assertEqual(calls, [])
         client.close()
 
@@ -486,7 +502,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(result.success)
 
     def test_replay_preserves_static_packet_and_timestamp(self):
-        aes_key = "rl-aes1qypsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgtruhcxwfed9"
+        aes_key = "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m"
         aes_auth = parse_auth_key(aes_key)
         server, endpoint = udp_server(10)
         received = []
