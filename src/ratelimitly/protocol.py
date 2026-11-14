@@ -16,6 +16,11 @@ from .types import (
     ServiceLatencyReport,
 )
 
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM as _AESGCM
+except ImportError:
+    _AESGCM = None
+
 
 R_TENANT_TLV_LEN = 40
 R_PDU_HEADER_LEN = 8
@@ -289,7 +294,10 @@ def build_authenticated_packet(
             + exact_pdu
         )
     elif auth.auth_type == "aes":
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        if _AESGCM is None:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        else:
+            AESGCM = _AESGCM
 
         exact_nonce = os.urandom(12) if nonce is None else bytes(nonce)
         if len(exact_nonce) != 12:
@@ -346,7 +354,10 @@ def _extract_authenticated_pdu(
             raise ValueError("invalid response cookie")
         pdu = packet[pdu_start:]
     elif auth.auth_type == "aes":
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        if _AESGCM is None:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        else:
+            AESGCM = _AESGCM
 
         if auth_type != R_TLV_AUTH_AES or auth_size != 32:
             raise ValueError("unexpected AES authentication TLV")

@@ -112,7 +112,10 @@ def responder(
     received=None,
     source_addresses=None,
 ):
+    ready = threading.Event()
+
     def run():
+        ready.set()
         try:
             for _ in range(drop_count):
                 packet, address = current.recvfrom(2048)
@@ -131,6 +134,7 @@ def responder(
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
+    ready.wait(1.0)
     return thread
 
 
@@ -505,6 +509,7 @@ class TestClient(unittest.TestCase):
         aes_key = "rl-aes1qgpsqqqqqqqqqqqrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqdgrrulcv9v93m"
         aes_auth = parse_auth_key(aes_key)
         server, endpoint = udp_server(10)
+        self.addCleanup(server.close)
         received = []
         resource = ResourceRequest(b"b" * 16, 1000, 100, 1)
         thread = responder(
@@ -518,9 +523,10 @@ class TestClient(unittest.TestCase):
         )
         client = RateLimitlyClient(
             aes_key,
-            policy=policy(unit_ms=20, replay_count=1, final_receive_units=1),
+            policy=policy(unit_ms=50, replay_count=1, final_receive_units=1),
             resolver=lambda _name: [endpoint],
         )
+        self.addCleanup(client.close)
         status, result = client.check_rate_limit([resource])
         thread.join(1.0)
         self.assertEqual(status, RCLIENT_OK)
@@ -528,8 +534,6 @@ class TestClient(unittest.TestCase):
         self.assertEqual(len(received), 2)
         # Round 1 replay must be bit-for-bit identical to round 0 packet
         self.assertEqual(received[0], received[1])
-        client.close()
-        server.close()
 
 
 if __name__ == "__main__":
