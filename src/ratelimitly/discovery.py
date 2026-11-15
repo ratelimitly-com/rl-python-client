@@ -117,11 +117,11 @@ def _system_dns_server() -> Tuple[str, int]:
     return "127.0.0.1", 53
 
 
-def _query_srv_native(srv_name: str, dns_host: str, dns_port: int) -> List[Tuple[str, int, int]]:
+def _query_records_native(srv_name: str, dns_host: str, dns_port: int, query_type: int) -> List[Tuple[str, int, int]]:
     transaction_id = random.randint(0, 0xFFFF)
     query = struct.pack("!HHHHHH", transaction_id, 0x0100, 1, 0, 0, 0)
     query += _encode_dns_name(srv_name)
-    query += struct.pack("!HH", 33, 1)
+    query += struct.pack("!HH", query_type, 1)
 
     response = None
     for family, socktype, protocol, _canonical, address in socket.getaddrinfo(
@@ -130,8 +130,9 @@ def _query_srv_native(srv_name: str, dns_host: str, dns_port: int) -> List[Tuple
         current = socket.socket(family, socktype, protocol)
         try:
             current.settimeout(2.0)
-            current.sendto(query, address)
-            response, _source = current.recvfrom(65535)
+            current.connect(address)
+            current.send(query)
+            response = current.recv(65535)
             break
         except OSError:
             continue
@@ -163,12 +164,35 @@ def _query_srv_native(srv_name: str, dns_host: str, dns_port: int) -> List[Tuple
         data_end = offset + data_length
         if data_end > len(response):
             raise ValueError("truncated DNS resource data")
-        if record_type == 33 and record_class == 1 and data_length >= 7:
+        if record_type == query_type == 33 and record_class == 1 and data_length >= 7:
             _priority, _weight, port = struct.unpack_from("!HHH", response, offset)
             target, _unused = _decode_dns_name(response, offset + 6)
             records.append((target, port, ttl))
+        elif record_type == query_type == 1 and record_class == 1 and data_length == 4:
+            records.append((socket.inet_ntop(socket.AF_INET, response[offset:data_end]), socket.AF_INET, ttl))
+        elif record_type == query_type == 28 and record_class == 1 and data_length == 16:
+            records.append((socket.inet_ntop(socket.AF_INET6, response[offset:data_end]), socket.AF_INET6, ttl))
         offset = data_end
     return records
+
+
+def _query_srv_native(srv_name: str, dns_host: str, dns_port: int) -> List[Tuple[str, int, int]]:
+    return _query_records_native(srv_name, dns_host, dns_port, 33)
+
+
+def _query_addresses_native(target: str, port: int, dns_host: str, dns_port: int):
+    """Use the explicit resolver for A/AAAA too, never the system target lookup."""
+    addresses = []
+    for query_type in (1, 28):
+        try:
+            records = _query_records_native(target, dns_host, dns_port, query_type)
+        except LookupError:
+            # An unavailable family must not hide a reachable other family.
+            continue
+        for ip, family, _ttl in records:
+            address = (ip, port) if family == socket.AF_INET else (ip, port, 0, 0)
+            addresses.append((family, socket.SOCK_DGRAM, socket.IPPROTO_UDP, "", address))
+    return addresses
 
 
 def discover_server_endpoints(dns_srv_domain: str) -> List[ServerEndpoint]:
@@ -204,12 +228,12 @@ def discover_server_endpoints(dns_srv_domain: str) -> List[ServerEndpoint]:
         if server_id is None:
             continue
         ttl_ms = ttl * 1000
-        addresses = socket.getaddrinfo(
-            target,
-            port,
-            family=socket.AF_UNSPEC,
-            type=socket.SOCK_DGRAM,
-        )
+        if override:
+            addresses = _query_addresses_native(target, port, dns_host, dns_port)
+        else:
+            addresses = socket.getaddrinfo(
+                target, port, family=socket.AF_UNSPEC, type=socket.SOCK_DGRAM,
+            )
         for family, socktype, protocol, _canonical, address in addresses:
             if socktype != socket.SOCK_DGRAM:
                 continue

@@ -9,6 +9,7 @@ import time
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from .auth import AuthKeyInfo, parse_auth_key
+from .traffic import TrafficStats, _TrafficCounters
 from .discovery import ServerEndpoint, discover_server_endpoints
 from .policy import RequestPolicy, default_request_policy
 from .protocol import (
@@ -91,6 +92,7 @@ class RateLimitlyClient:
         self._send_failures: Dict[int, int] = {}
         self._next_steering_ports: Dict[int, int] = {}
         self._closed = False
+        self._traffic = _TrafficCounters()
 
     def _ensure_endpoints(self) -> Tuple[int, List[ServerEndpoint]]:
         now_ms = self._clock_ms()
@@ -217,9 +219,11 @@ class RateLimitlyClient:
             try:
                 self._socket_for_family(target.family).sendto(packet, target.address)
             except OSError:
+                self._traffic.failed_send()
                 if target.server_id is not None:
                     failed_server_ids.append(target.server_id)
                 continue
+            self._traffic.record("sent", len(packet), target.family, target.address[0])
             delivered += 1
         if not best_effort and attempted > 0 and delivered == 0:
             return RCLIENT_ERR_IO
@@ -263,12 +267,15 @@ class RateLimitlyClient:
             for current in readable:
                 while consumed < 32:
                     try:
-                        packet, source = current.recvfrom(2048)
+                        # Include oversized/invalid UDP packets in physical totals
+                        # without silently counting only a truncated prefix.
+                        packet, source = current.recvfrom(65535)
                     except BlockingIOError:
                         break
                     except OSError:
                         return best, False, rebind_requested, RCLIENT_ERR_IO
                     consumed += 1
+                    self._traffic.record("received", len(packet), current.family, source[0])
                     try:
                         response_request_id, result = parse_rate_response_packet(
                             packet, self.auth_info
@@ -471,15 +478,21 @@ class RateLimitlyClient:
             try:
                 self._socket_for_family(target.family).sendto(packet, target.address)
             except OSError:
+                self._traffic.failed_send()
                 if target.server_id is not None:
                     failed_server_ids.append(target.server_id)
                 continue
+            self._traffic.record("sent", len(packet), target.family, target.address[0])
             delivered += 1
         if endpoints and delivered == 0:
             return RCLIENT_ERR_IO
         if 0 < delivered < len(endpoints):
             self._record_send_failures(failed_server_ids)
         return RCLIENT_OK
+
+    def traffic_stats(self) -> TrafficStats:
+        """Immutable physical UDP totals, including retries and replica traffic."""
+        return self._traffic.snapshot()
 
     def close(self) -> None:
         self._close_sockets()
@@ -548,6 +561,10 @@ class AsyncRateLimitlyClient:
     async def report_latency(self, reports: Sequence[ServiceLatencyReport]) -> int:
         async with self._serialization_lock():
             return await self._run_blocking(self._client.report_latency, reports)
+
+    def traffic_stats(self) -> TrafficStats:
+        """Return the wrapped client's lifetime physical UDP totals."""
+        return self._client.traffic_stats()
 
     def close(self) -> None:
         self._client.close()

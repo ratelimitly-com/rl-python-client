@@ -1,5 +1,10 @@
 # Configuration and request policy
 
+For an isolated DNS service, set `RCLIENT_DNS_SERVER=host[:port]` (bracket IPv6
+hosts when specifying a port). The override handles SRV and target A/AAAA
+queries; target names do not fall back to the system resolver. DNS packets are
+not included in the physical RateLimitly traffic counters.
+
 ## Client configuration
 
 ```python
