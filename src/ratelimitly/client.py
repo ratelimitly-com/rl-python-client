@@ -267,7 +267,9 @@ class RateLimitlyClient:
             for current in readable:
                 while consumed < 32:
                     try:
-                        packet, source = current.recvfrom(2048)
+                        # Include oversized/invalid UDP packets in physical totals
+                        # without silently counting only a truncated prefix.
+                        packet, source = current.recvfrom(65535)
                     except BlockingIOError:
                         break
                     except OSError:

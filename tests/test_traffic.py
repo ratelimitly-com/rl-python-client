@@ -27,19 +27,21 @@ class TrafficTests(unittest.TestCase):
     def test_replay_report_and_invalid_receive_are_physical_traffic(self):
         server, endpoint = udp_server(10)
         resource = ResourceRequest(r_client_derive_bucket_id("traffic", 1000, 100), 1000, 100, 1)
-        sent, received, errors = [], [], []
+        sent, received, errors, addresses = [], [], [], []
         def serve():
             try:
                 first, address = server.recvfrom(2048)
                 sent.append(first)  # deliberately drop first request
                 second, address = server.recvfrom(2048)
+                addresses.append(address)
                 sent.append(second)
                 self.assertEqual(first, second)
-                reply = response_packet(second[12:28], 10, resource=resource)
-                for packet in [b"invalid", reply]:
+                reply = response_packet(second[12:28], 10, resource=resource, steering_feedback=False)
+                for packet in [b"invalid" * 600, reply]:
                     server.sendto(packet, address)
                     received.append(packet)
-                report, _ = server.recvfrom(2048)
+                report, report_address = server.recvfrom(2048)
+                addresses.append(report_address)
                 sent.append(report)
             except BaseException as error:
                 errors.append(error)
@@ -63,6 +65,7 @@ class TrafficTests(unittest.TestCase):
             self.assertEqual(stats.received.ip_bytes, sum(len(p) + 28 for p in received))
             self.assertEqual(stats.send_failures, 0)
             self.assertFalse(stats.incomplete)
+            self.assertNotEqual(addresses[0][1], addresses[1][1])
         finally:
             server.close()
             thread.join(2)
@@ -88,3 +91,11 @@ class TrafficTests(unittest.TestCase):
         self.assertEqual(counters.snapshot().sent.ip_bytes, MAX_COUNTER)
         self.assertTrue(counters.snapshot().incomplete)
         self.assertEqual(stats.sent.datagrams, 3)  # earlier snapshot is detached
+
+    def test_unknown_family_does_not_invent_ip_bytes(self):
+        counters = _TrafficCounters()
+        counters.record("received", 7, -1, "not-an-ip")
+        stats = counters.snapshot()
+        self.assertEqual(stats.received.payload_bytes, 7)
+        self.assertEqual(stats.received.ip_bytes, 0)
+        self.assertTrue(stats.incomplete)
