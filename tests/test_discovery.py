@@ -27,7 +27,8 @@ COOKIE_KEY = "rl-cookie1qgpqqqqqqqqqqqqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsz
 class TestDiscovery(unittest.TestCase):
     def test_native_override_resolves_srv_and_both_address_families_over_udp(self):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dns:
-            dns.bind(("127.0.0.1", 0)); dns.settimeout(2)
+            dns.bind(("127.0.0.1", 0))
+            dns.settimeout(2)
             errors, queries = [], []
             def serve():
                 try:
@@ -42,7 +43,8 @@ class TestDiscovery(unittest.TestCase):
                         header = packet[:2] + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
                         rr = b"\xc0\x0c" + struct.pack("!HHIH", kind, 1, 30, len(data)) + data
                         dns.sendto(header + packet[12:] + rr, peer)
-                except BaseException as error: errors.append(error)
+                except BaseException as error:
+                    errors.append(error)
             worker = threading.Thread(target=serve)
             worker.start()
             with patch.dict(os.environ, {"RCLIENT_DNS_SERVER": f"127.0.0.1:{dns.getsockname()[1]}"}), patch("ratelimitly.discovery._dns_resolver", None):

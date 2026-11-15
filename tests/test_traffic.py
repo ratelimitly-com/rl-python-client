@@ -83,7 +83,7 @@ class TrafficTests(unittest.TestCase):
 
     def test_ip_families_and_saturation(self):
         counters = _TrafficCounters()
-        for family, address, overhead in [(socket.AF_INET, "127.0.0.1", 28), (socket.AF_INET6, "::1", 48), (socket.AF_INET6, "::ffff:127.0.0.1", 28)]:
+        for family, address in [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1"), (socket.AF_INET6, "::ffff:127.0.0.1")]:
             counters.record("sent", 100, family, address)
         stats = counters.snapshot()
         self.assertEqual(stats.sent.ip_bytes, 300 + 28 + 48 + 28)
