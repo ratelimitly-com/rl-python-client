@@ -138,6 +138,8 @@ The client returns the same status-code family as the C library. It does not cho
 
 ## Documentation
 
+- [Physical traffic counters](docs/traffic.md)
+
 - [API reference](docs/api.md)
 - [Configuration and request policy](docs/configuration.md)
 - [Architecture, wire format, and conformance](docs/architecture.md)

@@ -30,10 +30,13 @@ from .protocol import (
     r_client_derive_latency_tracker_id,
 )
 from .client import RateLimitlyClient, AsyncRateLimitlyClient
+from .traffic import TrafficDirection, TrafficStats
 
 __version__ = "2.0.0"
 
 __all__ = [
+    "TrafficDirection",
+    "TrafficStats",
     "RateLimitlyClient",
     "AsyncRateLimitlyClient",
     "ResourceRequest",

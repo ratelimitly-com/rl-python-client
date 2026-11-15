@@ -1,5 +1,11 @@
 # Python API reference
 
+## Physical traffic
+
+`client.traffic_stats()` returns immutable lifetime UDP counters. See
+[counter semantics and limitations](traffic.md). The async client exposes the
+same method; reading counters does not send traffic.
+
 ## Client lifecycle
 
 ```python
